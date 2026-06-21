@@ -115,6 +115,43 @@ def test_run_once_syncs_visit_cat_id(tmp_path):
     assert row["cat_id"] == store.cat_id_by_name(conn, "Garfield")
 
 
+class _NoCatFilter:
+    """Rejects every frame — simulates the COCO detector missing a cat in
+    dawn / IR low-light frames."""
+    def has_cat(self, path):
+        return False
+
+
+def test_eliminated_visit_bypasses_catfilter(tmp_path):
+    # Live bug: dawn eliminations had frames captured but the cat/no-cat filter
+    # scored them all <0.4 -> auto-none -> never labeled. An elimination is
+    # ground truth a cat was present, so the filter must not veto it.
+    conn = _db(tmp_path)
+    vid = store.open_visit(conn, 1000.0)
+    store.mark_elimination(conn, vid, use_record=69)  # ground truth: a cat was here
+    store.insert_capture(conn, 1000.0, vid, "cam1", "/g/garf_1.jpg")
+    store.insert_capture(conn, 1001.0, vid, "cam2", "/g/garf_2.jpg")
+    al = AutoLabeler(conn, FakeLabeler({"garf": "Garfield"}), refs={},
+                     valid_cats=CATS, catfilter=_NoCatFilter())
+    al.run_once()
+    # filter said 'no cat' on every frame, but the elimination forces them to the model
+    assert store.gallery_counts(conn)["Garfield"] == 2
+    row = conn.execute("SELECT cat_id FROM visits WHERE id=?", (vid,)).fetchone()
+    assert row["cat_id"] == store.cat_id_by_name(conn, "Garfield")
+
+
+def test_noneliminated_visit_still_filters(tmp_path):
+    # control: a non-eliminated visit with a rejecting filter is still vetoed
+    conn = _db(tmp_path)
+    vid = store.open_visit(conn, 1000.0)
+    store.insert_capture(conn, 1000.0, vid, "cam1", "/g/garf_1.jpg")
+    al = AutoLabeler(conn, FakeLabeler({"garf": "Garfield"}), refs={},
+                     valid_cats=CATS, catfilter=_NoCatFilter())
+    al.run_once()
+    assert store.gallery_counts(conn)["Garfield"] == 0
+    assert all(r["label_source"] == "auto-none" for r in store.captures_for_visit(conn, vid))
+
+
 def test_run_once_conflict_writes_nothing(tmp_path):
     conn = _db(tmp_path)
     vid = store.open_visit(conn, 1000.0)

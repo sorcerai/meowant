@@ -42,12 +42,20 @@ class AutoLabeler:
         by_path = {r["path"]: r["id"] for r in rows}
         # Stage 1 — cheap cat/no-cat filter: empties never reach the expensive
         # labeler and are marked examined-empty so the gallery stays clean.
-        cat_rows, empty_rows = [], []
-        for r in rows:
-            if self.catfilter.has_cat(r["path"]):
-                cat_rows.append(r)
-            else:
-                empty_rows.append(r)
+        # EXCEPTION: an eliminated visit is ground truth that a cat was present
+        # (use_record fired). The filter must not be able to veto it — dawn / IR
+        # frames score below the COCO detector's threshold and were being wrongly
+        # dropped as 'no cat', leaving real visits unattributed. Send them all to
+        # the model instead.
+        if store.visit_is_eliminated(self.conn, vid):
+            cat_rows, empty_rows = list(rows), []
+        else:
+            cat_rows, empty_rows = [], []
+            for r in rows:
+                if self.catfilter.has_cat(r["path"]):
+                    cat_rows.append(r)
+                else:
+                    empty_rows.append(r)
         if not dry_run:
             for r in empty_rows:
                 store.mark_capture_examined(self.conn, r["id"], "auto-none")

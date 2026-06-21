@@ -154,6 +154,14 @@ def cat_name_by_id(conn, cat_id):
         return row["name"] if row else None
 
 
+def visit_is_eliminated(conn, visit_id):
+    """True if this visit recorded an elimination (use_record fired) — ground
+    truth that a cat was present, so the cat/no-cat filter must not veto it."""
+    with _lock:
+        row = conn.execute("SELECT eliminated FROM visits WHERE id=?", (visit_id,)).fetchone()
+        return bool(row["eliminated"]) if row else False
+
+
 def visit_established_cat(conn, visit_id):
     """The single cat a HUMAN established for this visit (human/corrected labels),
     or None if none or conflicting. This is authoritative context: a visit is one
