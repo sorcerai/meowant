@@ -78,6 +78,9 @@ class AutoLabeler:
             for r in cat_rows:
                 if r["path"] not in applied_paths:
                     store.mark_capture_examined(self.conn, r["id"], marker)
+            # 6v5: attribute the VISIT row too (once per visit, not per frame),
+            # so scatter-blame and health baselines read the right cat.
+            store.sync_visit_cat(self.conn, vid)
         return {"visit": vid, "status": d["status"], "cat": d["cat"],
                 "applied": len(d["apply"]), "cats": d["cats"], "filtered": len(empty_rows)}
 

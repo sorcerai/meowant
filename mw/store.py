@@ -2,6 +2,7 @@
 import json
 import sqlite3
 import threading
+from collections import Counter
 from datetime import datetime, date
 
 _lock = threading.Lock()
@@ -181,11 +182,19 @@ def stale_unlabeled_count(conn, before_iso):
 def set_capture_label(conn, capture_id, cat_id, source="human"):
     """Apply a gallery label. `source`: 'human' (label.py), 'auto' (labeler),
     or 'corrected' (human overriding a prior auto-label). Provenance is the
-    trust channel — it's how we audit and measure the auto-labeler."""
+    trust channel — it's how we audit and measure the auto-labeler.
+
+    Keeps the visit row consistent: a frame label always re-syncs its visit's
+    cat_id (low-volume human/corrected path — the per-frame auto path batches
+    via the labeler instead, see sync_visit_cat)."""
     with _lock:
         conn.execute("UPDATE captures SET label=?, label_source=? WHERE id=?",
                      (cat_id, source, capture_id))
+        row = conn.execute("SELECT visit_id FROM captures WHERE id=?",
+                           (capture_id,)).fetchone()
         conn.commit()
+    if row and row["visit_id"] is not None:
+        sync_visit_cat(conn, row["visit_id"])
 
 
 def captures_by_visit(conn, visit_ids):
@@ -290,6 +299,37 @@ def set_visit_identity(conn, visit_id, cat_id, confidence):
         conn.execute("UPDATE visits SET cat_id=?, confidence=? WHERE id=?",
                      (cat_id, confidence, visit_id))
         conn.commit()
+
+
+def sync_visit_cat(conn, visit_id):
+    """Attribute the VISIT to a cat from the MAJORITY of its labeled captures
+    (captures.label is the source of truth). Confidence = agreement ratio.
+    No-op returning None if the visit has no labeled frames yet.
+
+    Fixes 6v5: the auto-labeler wrote captures.label but never visits.cat_id,
+    so any visit-level reader (scatter blame, per-cat health baselines) saw a
+    stale/empty attribution. Returns (cat_id, confidence) when it sets one."""
+    with _lock:
+        rows = conn.execute(
+            "SELECT label FROM captures WHERE visit_id=? AND label IS NOT NULL",
+            (visit_id,)).fetchall()
+    labels = [r["label"] for r in rows]
+    if not labels:
+        return None
+    cat_id, n = Counter(labels).most_common(1)[0]
+    conf = n / len(labels)
+    set_visit_identity(conn, visit_id, cat_id, conf)
+    return cat_id, conf
+
+
+def backfill_visit_cats(conn):
+    """One-time repair: re-derive visits.cat_id from captures.label for every
+    visit that has labeled frames. Idempotent. Returns the number of visits set."""
+    with _lock:
+        vids = [r["visit_id"] for r in conn.execute(
+            "SELECT DISTINCT visit_id FROM captures "
+            "WHERE label IS NOT NULL AND visit_id IS NOT NULL").fetchall()]
+    return sum(1 for vid in vids if sync_visit_cat(conn, vid) is not None)
 
 
 def unlabeled_captures(conn, limit=500):

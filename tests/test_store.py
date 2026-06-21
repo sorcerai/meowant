@@ -67,6 +67,67 @@ def test_set_visit_identity(tmp_path):
     assert row["cat_id"] == uid and abs(row["confidence"] - 0.91) < 1e-9
 
 
+# ---- 6v5: visit-level attribution synced from captures.label ----------------
+
+def test_sync_visit_cat_uses_label_majority(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Garfield", "Ella"])
+    vid = store.open_visit(conn, 1000.0)
+    gid = store.cat_id_by_name(conn, "Garfield")
+    uid = store.cat_id_by_name(conn, "Ucok")
+    # 3 frames Garfield, 1 stray Ucok -> visit attributes to Garfield @ 0.75
+    for i in range(3):
+        c = store.insert_capture(conn, 1000.0 + i, vid, "cam", f"/g/g{i}.jpg", None)
+        store.apply_auto_label(conn, c, gid, 0.9)
+    c = store.insert_capture(conn, 1100.0, vid, "cam", "/g/u.jpg", None)
+    store.apply_auto_label(conn, c, uid, 0.9)
+    assert store.sync_visit_cat(conn, vid) == (gid, 0.75)
+    row = conn.execute("SELECT cat_id, confidence FROM visits WHERE id=?", (vid,)).fetchone()
+    assert row["cat_id"] == gid and abs(row["confidence"] - 0.75) < 1e-9
+
+
+def test_sync_visit_cat_no_labels_is_noop(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    vid = store.open_visit(conn, 1000.0)
+    store.insert_capture(conn, 1000.0, vid, "cam", "/g/x.jpg", None)  # unlabeled
+    assert store.sync_visit_cat(conn, vid) is None
+    row = conn.execute("SELECT cat_id FROM visits WHERE id=?", (vid,)).fetchone()
+    assert row["cat_id"] is None
+
+
+def test_set_capture_label_syncs_visit(tmp_path):
+    # a HUMAN label must also update the visit row, not just the capture
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Garfield", "Ella"])
+    vid = store.open_visit(conn, 1000.0)
+    c1 = store.insert_capture(conn, 1000.0, vid, "cam", "/g/a.jpg", None)
+    gid = store.cat_id_by_name(conn, "Garfield")
+    store.set_capture_label(conn, c1, gid)
+    row = conn.execute("SELECT cat_id FROM visits WHERE id=?", (vid,)).fetchone()
+    assert row["cat_id"] == gid
+
+
+def test_backfill_visit_cats(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Garfield", "Ella"])
+    gid = store.cat_id_by_name(conn, "Garfield")
+    eid = store.cat_id_by_name(conn, "Ella")
+    v1 = store.open_visit(conn, 1000.0)
+    store.apply_auto_label(conn, store.insert_capture(conn, 1000.0, v1, "c", "/g/a.jpg", None), gid, 0.9)
+    v2 = store.open_visit(conn, 2000.0)
+    store.apply_auto_label(conn, store.insert_capture(conn, 2000.0, v2, "c", "/g/b.jpg", None), eid, 0.9)
+    v3 = store.open_visit(conn, 3000.0)  # no labeled captures -> untouched
+    store.insert_capture(conn, 3000.0, v3, "c", "/g/c.jpg", None)
+    assert store.backfill_visit_cats(conn) == 2
+    get = lambda v: conn.execute("SELECT cat_id FROM visits WHERE id=?", (v,)).fetchone()["cat_id"]
+    assert get(v1) == gid and get(v2) == eid and get(v3) is None
+
+
 def test_seed_cats(tmp_path):
     conn = store.connect(str(tmp_path / "t.db"))
     store.init_db(conn)

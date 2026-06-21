@@ -101,6 +101,20 @@ def test_run_once_applies_auto_labels_with_provenance(tmp_path):
     assert rows[e1]["label"] is None   # empty frame left for the (future) detector
 
 
+def test_run_once_syncs_visit_cat_id(tmp_path):
+    # 6v5: the labeler wrote captures.label but never visits.cat_id, so any
+    # visit-level attribution (scatter blame, health baselines) was wrong.
+    conn = _db(tmp_path)
+    vid = store.open_visit(conn, 1000.0)
+    store.insert_capture(conn, 1000.0, vid, "cam1", "/g/garf_1.jpg")
+    store.insert_capture(conn, 1001.0, vid, "cam2", "/g/garf_2.jpg")
+    al = AutoLabeler(conn, FakeLabeler({"garf": "Garfield"}), refs={}, valid_cats=CATS)
+    al.run_once()
+    assert store.gallery_counts(conn)["Garfield"] == 2
+    row = conn.execute("SELECT cat_id FROM visits WHERE id=?", (vid,)).fetchone()
+    assert row["cat_id"] == store.cat_id_by_name(conn, "Garfield")
+
+
 def test_run_once_conflict_writes_nothing(tmp_path):
     conn = _db(tmp_path)
     vid = store.open_visit(conn, 1000.0)
