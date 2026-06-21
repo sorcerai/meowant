@@ -1,0 +1,330 @@
+"""SQLite persistence for events and visits."""
+import json
+import sqlite3
+import threading
+from datetime import datetime, date
+
+_lock = threading.Lock()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS cats(
+  id INTEGER PRIMARY KEY, name TEXT UNIQUE, notes TEXT);
+CREATE TABLE IF NOT EXISTS events(
+  id INTEGER PRIMARY KEY, ts TEXT, kind TEXT, detail TEXT);
+CREATE TABLE IF NOT EXISTS visits(
+  id INTEGER PRIMARY KEY,
+  enter_ts TEXT, leave_ts TEXT, duration_s INTEGER,
+  cat_id INTEGER REFERENCES cats(id), confidence REAL,
+  eliminated INTEGER DEFAULT 0, use_record INTEGER,
+  contents_load_min INTEGER, contents_load_max INTEGER,
+  frame_path TEXT);
+CREATE TABLE IF NOT EXISTS captures(
+  id INTEGER PRIMARY KEY, ts TEXT, visit_id INTEGER REFERENCES visits(id),
+  camera TEXT, path TEXT, label INTEGER REFERENCES cats(id),
+  pred INTEGER, pred_conf REAL, is_ir INTEGER,
+  label_source TEXT);   -- 'human' | 'auto' | 'corrected' (NULL = unlabeled)
+"""
+
+# Columns added after the initial schema shipped; applied idempotently on init.
+_MIGRATIONS = [
+    ("captures", "label_source", "TEXT"),
+]
+
+
+def _migrate(conn):
+    for table, col, decl in _MIGRATIONS:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    conn.commit()
+
+
+def _iso(ts):
+    # local time so "today" (date prefix) matches the user's day, not UTC
+    return datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+
+
+def connect(path):
+    conn = sqlite3.connect(path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db(conn):
+    with _lock:
+        conn.executescript(SCHEMA)
+        _migrate(conn)   # bring older DBs up to the current column set
+        conn.commit()
+
+
+def insert_event(conn, ev):
+    with _lock:
+        conn.execute("INSERT INTO events(ts, kind, detail) VALUES(?,?,?)",
+                     (_iso(ev.ts), ev.kind, json.dumps(ev.detail)))
+        conn.commit()
+
+
+def open_visit(conn, enter_ts):
+    with _lock:
+        cur = conn.execute("INSERT INTO visits(enter_ts) VALUES(?)", (_iso(enter_ts),))
+        conn.commit()
+        return cur.lastrowid
+
+
+def close_visit(conn, visit_id, leave_ts, duration_s):
+    with _lock:
+        conn.execute("UPDATE visits SET leave_ts=?, duration_s=? WHERE id=?",
+                     (_iso(leave_ts), duration_s, visit_id))
+        conn.commit()
+
+
+def reconcile_open_visits(conn):
+    """Close any visit left open (NULL leave_ts) by a prior crash/restart."""
+    with _lock:
+        conn.execute("UPDATE visits SET leave_ts=enter_ts, duration_s=0 "
+                     "WHERE leave_ts IS NULL")
+        conn.commit()
+
+
+def mark_elimination(conn, visit_id, use_record=None):
+    with _lock:
+        conn.execute(
+            "UPDATE visits SET eliminated=1, use_record=COALESCE(?, use_record) WHERE id=?",
+            (use_record, visit_id))
+        conn.commit()
+
+
+def recent_visits(conn, limit=20):
+    with _lock:
+        cur = conn.execute("SELECT * FROM visits ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def eliminations_today(conn, day=None):
+    """Count today's eliminations from OUR tracking (dp102-driven) — the box's
+    own dp7 counter is unreliable. day defaults to the local date."""
+    prefix = (day or date.today().isoformat())
+    with _lock:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM visits WHERE eliminated=1 AND enter_ts LIKE ?",
+            (prefix + "%",)).fetchone()
+        return row[0]
+
+
+def seed_cats(conn, names):
+    with _lock:
+        for n in names:
+            conn.execute("INSERT OR IGNORE INTO cats(name) VALUES(?)", (n,))
+        conn.commit()
+
+
+def insert_capture(conn, ts, visit_id, camera, path, is_ir=None):
+    with _lock:
+        cur = conn.execute(
+            "INSERT INTO captures(ts, visit_id, camera, path, is_ir) VALUES(?,?,?,?,?)",
+            (_iso(ts), visit_id, camera, path, is_ir))
+        conn.commit()
+        return cur.lastrowid
+
+
+def latest_open_visit_id(conn):
+    with _lock:
+        row = conn.execute(
+            "SELECT id FROM visits WHERE leave_ts IS NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return row["id"] if row else None
+
+
+def captures_for_visit(conn, visit_id):
+    with _lock:
+        cur = conn.execute("SELECT * FROM captures WHERE visit_id=? ORDER BY id", (visit_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def cat_id_by_name(conn, name):
+    with _lock:
+        row = conn.execute("SELECT id FROM cats WHERE name=?", (name,)).fetchone()
+        return row["id"] if row else None
+
+
+def cat_name_by_id(conn, cat_id):
+    with _lock:
+        row = conn.execute("SELECT name FROM cats WHERE id=?", (cat_id,)).fetchone()
+        return row["name"] if row else None
+
+
+def visit_established_cat(conn, visit_id):
+    """The single cat a HUMAN established for this visit (human/corrected labels),
+    or None if none or conflicting. This is authoritative context: a visit is one
+    cat, so the auto-labeler must not tag the visit's other frames as a different
+    cat than the human already confirmed."""
+    with _lock:
+        rows = conn.execute(
+            "SELECT DISTINCT label FROM captures WHERE visit_id=? AND label IS NOT NULL "
+            "AND label_source IN ('human','corrected')", (visit_id,)).fetchall()
+    cats = [r["label"] for r in rows]
+    return cat_name_by_id(conn, cats[0]) if len(cats) == 1 else None
+
+
+def stale_unlabeled_count(conn, before_iso):
+    """Captures completely untouched (no label, no auto verdict) older than
+    before_iso — frames the auto-labeler should have processed but hasn't
+    (labeler stuck/dead). The liveness signal."""
+    with _lock:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM captures WHERE label IS NULL AND label_source IS NULL "
+            "AND visit_id IS NOT NULL AND ts < ?",  # match the labeler's actual queue
+            (before_iso,)).fetchone()
+        return row[0]
+
+
+def set_capture_label(conn, capture_id, cat_id, source="human"):
+    """Apply a gallery label. `source`: 'human' (label.py), 'auto' (labeler),
+    or 'corrected' (human overriding a prior auto-label). Provenance is the
+    trust channel — it's how we audit and measure the auto-labeler."""
+    with _lock:
+        conn.execute("UPDATE captures SET label=?, label_source=? WHERE id=?",
+                     (cat_id, source, capture_id))
+        conn.commit()
+
+
+def captures_by_visit(conn, visit_ids):
+    """All capture rows for the given visit ids, grouped {visit_id: [rows]}."""
+    out = {}
+    with _lock:
+        for vid in visit_ids:
+            cur = conn.execute("SELECT * FROM captures WHERE visit_id=? ORDER BY id", (vid,))
+            out[vid] = [dict(r) for r in cur.fetchall()]
+    return out
+
+
+def unlabeled_visit_ids(conn, limit=200):
+    """Visit ids with at least one UNTOUCHED capture — the auto-labeler work
+    queue. A frame is untouched only if no human label AND no prior auto verdict
+    (label_source IS NULL); this is what stops the worker from re-running an
+    expensive model on empty/conflict frames every sweep."""
+    with _lock:
+        cur = conn.execute(
+            "SELECT DISTINCT visit_id FROM captures "
+            "WHERE label IS NULL AND label_source IS NULL AND visit_id IS NOT NULL "
+            "ORDER BY visit_id LIMIT ?", (limit,))
+        return [r["visit_id"] for r in cur.fetchall()]
+
+
+def mark_capture_examined(conn, capture_id, source):
+    """Record an auto verdict that produced NO gallery label ('auto-none' for
+    empty/no-cat, 'auto-conflict' for an ambiguous visit) so the frame leaves
+    the auto queue. Only touches still-untouched rows, so a human label applied
+    during the (slow) inference window is never clobbered."""
+    with _lock:
+        conn.execute(
+            "UPDATE captures SET label_source=? WHERE id=? AND label_source IS NULL",
+            (source, capture_id))
+        conn.commit()
+
+
+def apply_auto_label(conn, capture_id, cat_id, conf):
+    """Atomically apply an AUTO label + prediction, but only if the frame is
+    still untouched (no human label landed during inference). Returns True if
+    it was applied."""
+    with _lock:
+        cur = conn.execute(
+            "UPDATE captures SET label=?, label_source='auto', pred=?, pred_conf=? "
+            "WHERE id=? AND label IS NULL AND label_source IS NULL",
+            (cat_id, cat_id, conf, capture_id))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def review_queue(conn, limit=100):
+    """Frames the auto-labeler punted to a human (ambiguous visits)."""
+    with _lock:
+        cur = conn.execute(
+            "SELECT id, visit_id, camera, path FROM captures "
+            "WHERE label_source='auto-conflict' ORDER BY id LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def recent_auto_labels(conn, limit=50):
+    """Auto-applied labels for the trust channel — newest first, with the cat
+    name and whether a human later corrected it."""
+    with _lock:
+        cur = conn.execute(
+            "SELECT cap.id, cap.path, cap.camera, cap.pred_conf, cap.label_source, "
+            "       c.name AS cat FROM captures cap LEFT JOIN cats c ON c.id=cap.label "
+            "WHERE cap.label_source IN ('auto','corrected') "
+            "ORDER BY cap.id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def labeler_accuracy(conn):
+    """Trust-channel scoreboard: counts by provenance, plus how often an
+    auto-label disagreed with the model's own prediction after human review
+    (i.e. corrected). 'corrected' rows are confirmed auto-labeler misses."""
+    with _lock:
+        rows = conn.execute(
+            "SELECT label_source, COUNT(*) AS n FROM captures "
+            "WHERE label IS NOT NULL GROUP BY label_source").fetchall()
+        by_source = {r["label_source"]: r["n"] for r in rows}
+        auto = by_source.get("auto", 0)
+        corrected = by_source.get("corrected", 0)
+        reviewed = auto + corrected
+        return {
+            "human": by_source.get("human", 0),
+            "auto": auto,
+            "corrected": corrected,
+            "auto_accuracy": (auto / reviewed) if reviewed else None,
+        }
+
+
+def set_capture_prediction(conn, capture_id, cat_id, conf):
+    """Per-view model prediction (pre-fusion), kept for auditing the matcher."""
+    with _lock:
+        conn.execute("UPDATE captures SET pred=?, pred_conf=? WHERE id=?",
+                     (cat_id, conf, capture_id))
+        conn.commit()
+
+
+def set_visit_identity(conn, visit_id, cat_id, confidence):
+    with _lock:
+        conn.execute("UPDATE visits SET cat_id=?, confidence=? WHERE id=?",
+                     (cat_id, confidence, visit_id))
+        conn.commit()
+
+
+def unlabeled_captures(conn, limit=500):
+    with _lock:
+        cur = conn.execute(
+            "SELECT * FROM captures WHERE label IS NULL ORDER BY id LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def gallery_counts(conn):
+    """Labeled-capture count per cat name — shows how built-out the gallery is."""
+    with _lock:
+        cur = conn.execute(
+            "SELECT c.name AS name, COUNT(cap.id) AS n FROM cats c "
+            "LEFT JOIN captures cap ON cap.label = c.id "
+            "GROUP BY c.id ORDER BY c.name")
+        return {r["name"]: r["n"] for r in cur.fetchall()}
+
+
+def eliminated_visits_missing_captures(conn, after_iso, before_iso):
+    """Eliminated visits closed within (after_iso, before_iso] that have zero
+    capture rows — capture likely failed (stale thread or dead stream). The
+    `before_iso` bound is the settle window (don't flag in-flight grabs);
+    `after_iso` keeps the sweep to recent visits so a restart can't re-flag
+    ancient history. leave_ts is a local-ISO string, so lexical order == time
+    order for the comparison — except during the DST fall-back hour, where a
+    visit in the repeated hour could fall outside the window (worst case: one
+    missed alert/year; the loud proactive stream probe still covers the source
+    going down)."""
+    with _lock:
+        cur = conn.execute(
+            "SELECT v.id, v.enter_ts, v.leave_ts FROM visits v "
+            "WHERE v.eliminated=1 AND v.leave_ts IS NOT NULL "
+            "AND v.leave_ts > ? AND v.leave_ts <= ? "
+            "AND NOT EXISTS (SELECT 1 FROM captures c WHERE c.visit_id = v.id) "
+            "ORDER BY v.id",
+            (after_iso, before_iso))
+        return [dict(r) for r in cur.fetchall()]

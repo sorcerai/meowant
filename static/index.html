@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Meowant SC10</title>
+<style>
+  :root{--bg:#0e0f13;--card:#1a1c23;--ink:#e8e8ea;--mut:#8a8f9a;--ok:#3ecf8e;--warn:#f5a623;--bad:#ff5c5c;--accent:#6c7bff}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 -apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:560px;margin:0 auto;padding:20px}
+  h1{font-size:20px;margin:0 0 16px;display:flex;align-items:center;gap:10px}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--mut)}
+  .dot.clean{background:var(--accent);animation:pulse 1s infinite}
+  .dot.standby{background:var(--ok)}
+  @keyframes pulse{50%{opacity:.3}}
+  .card{background:var(--card);border-radius:12px;padding:16px;margin-bottom:14px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .stat{background:#22252e;border-radius:8px;padding:10px}
+  .stat .k{color:var(--mut);font-size:12px} .stat .v{font-size:18px;font-weight:600;margin-top:2px}
+  .v.warn{color:var(--warn)} .v.bad{color:var(--bad)} .v.ok{color:var(--ok)}
+  button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:11px 14px;font-size:14px;font-weight:600;cursor:pointer}
+  button.ghost{background:#2a2d37}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .row button{flex:1;min-width:120px}
+  input{background:#22252e;border:1px solid #333;color:var(--ink);border-radius:6px;padding:7px;width:70px}
+  details{margin-top:6px} summary{cursor:pointer;color:var(--mut)} pre{background:#15171d;padding:10px;border-radius:8px;overflow:auto;font-size:12px}
+  .msg{min-height:18px;color:var(--ok);font-size:13px;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span id="dot" class="dot"></span> Meowant SC10 <span id="st" style="color:var(--mut);font-weight:400"></span></h1>
+
+  <div class="card">
+    <div class="grid">
+      <div class="stat"><div class="k">Uses today</div><div class="v" id="uses">–</div></div>
+      <div class="stat"><div class="k">Clean delay</div><div class="v" id="delay">–</div></div>
+      <div class="stat"><div class="k">Waste bin</div><div class="v" id="bin">–</div></div>
+      <div class="stat"><div class="k">Faults</div><div class="v" id="fault">–</div></div>
+      <div class="stat"><div class="k">Quiet hours</div><div class="v" id="quiet">–</div></div>
+      <div class="stat"><div class="k">Presence</div><div class="v" id="pres">–</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button onclick="ctl('clean')">⟳ Clean now</button>
+      <button class="ghost" id="autoBtn" onclick="toggleAuto()">Auto-clean</button>
+      <button class="ghost" id="sleepBtn" onclick="toggleSleep()">Sleep</button>
+    </div>
+    <div class="row">
+      <span>Delay <input type="number" id="delayIn" min="1" max="60"> min
+        <button class="ghost" onclick="setDelay()">set</button></span>
+    </div>
+    <div class="row">
+      <span>Quiet <input type="time" id="qs"> → <input type="time" id="qe">
+        <button class="ghost" onclick="setQuiet()">set</button></span>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <details><summary>Raw data points</summary><pre id="raw"></pre></details>
+</div>
+
+<script>
+let S={};
+async function poll(force){
+  try{
+    const r=await fetch('/state'); S=await r.json(); render();
+  }catch(e){ document.getElementById('msg').textContent='offline: '+e; }
+}
+function render(){
+  const cleaning=S.status==='cleaning';
+  const d=document.getElementById('dot'); d.className='dot '+(cleaning?'clean':'standby');
+  document.getElementById('st').textContent=S.status||'';
+  document.getElementById('uses').textContent=S.uses_today??'–';
+  document.getElementById('delay').textContent=(S.delay_clean_time??'–')+' min';
+  const bin=document.getElementById('bin'); bin.textContent=S.bin_full?'FULL':'ok'; bin.className='v '+(S.bin_full?'bad':'ok');
+  const f=document.getElementById('fault'); const ff=(S.faults||[]).filter(x=>x!=='none'); f.textContent=ff.length?ff.join(','):'none'; f.className='v '+(ff.length?'bad':'ok');
+  document.getElementById('quiet').textContent=(S.quiet_start||'?')+'→'+(S.quiet_end||'?');
+  document.getElementById('pres').textContent=S.phase??'–';
+  document.getElementById('autoBtn').textContent='Auto-clean: '+(S.auto_clean?'ON':'OFF');
+  document.getElementById('autoBtn').style.background=S.auto_clean?'var(--accent)':'#2a2d37';
+  document.getElementById('sleepBtn').textContent='Sleep: '+(S.sleep_active?'ON':'OFF');
+  document.getElementById('raw').textContent=JSON.stringify(S.named||S.raw,null,2);
+}
+async function ctl(action,value){
+  document.getElementById('msg').textContent='…';
+  const r=await fetch('/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,value})});
+  const j=await r.json();
+  document.getElementById('msg').textContent=j.ok?('✓ '+action):('✗ '+(j.error||'failed'));
+  setTimeout(poll,600);
+}
+const toggleAuto =()=>ctl('autoclean',!S.auto_clean);
+const toggleSleep=()=>ctl('sleep',!S.sleep_active);
+const setDelay   =()=>ctl('delay',+document.getElementById('delayIn').value);
+const setQuiet   =()=>ctl('quiet',{start:document.getElementById('qs').value,end:document.getElementById('qe').value});
+poll(); setInterval(poll,3000);
+</script>
+</body>
+</html>

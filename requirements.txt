@@ -1,0 +1,4 @@
+tinytuya>=1.18.0
+flask>=3.0          # web dashboard (app.py)
+textual>=1.0        # terminal dashboard (tui.py)
+rich>=13.0

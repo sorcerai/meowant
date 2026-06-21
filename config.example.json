@@ -1,0 +1,19 @@
+{
+  "device_id": "PUT_DEVICE_ID_HERE",
+  "address": "192.168.1.X",
+  "local_key": "PUT_YOUR_LOCAL_KEY_HERE",
+  "version": 3.5,
+  "cloud": {
+    "region": "us",
+    "api_id": "PUT_TUYA_IOT_ACCESS_ID_HERE",
+    "api_secret": "PUT_TUYA_IOT_ACCESS_SECRET_HERE"
+  },
+  "smartclean": {
+    "enabled": true,
+    "idle_seconds": 90,
+    "max_wait_seconds": 480
+  },
+  "cameras": [
+    {"name": "litter", "url": "rtsp://USER:PASS@192.168.1.X:554/Streaming/Channels/102"}
+  ]
+}

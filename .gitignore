@@ -1,0 +1,41 @@
+# Secrets — contains local_key and Tuya cloud credentials. NEVER commit.
+config.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# tinytuya artifacts
+devices.json
+snapshot.json
+tuya-raw.json
+tinytuya.json
+
+# monitor logs
+cycle_log.tsv
+*.tsv
+
+# cat photos / training data (privacy + size)
+gallery/
+
+# SQLite databases
+*.db
+
+# Agent / tooling state — LOCAL ONLY, never publish (whole dirs)
+.beads/
+.dolt/
+.beads-credential-key
+.claude/
+.codex/
+.agents/
+.superpowers/
+.mcp.json
+
+# macOS + scratch
+.DS_Store
+council_err.log
+
+# daemon log
+meowantd.log
