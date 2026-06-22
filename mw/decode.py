@@ -37,6 +37,17 @@ def decode_dp102(b64):
         return None
 
 
+def classify_waste(use_record, poop_threshold=100):
+    """Pee vs poop from dp102 use_record (waste magnitude — the same signal as
+    Litter-Robot's 'WasteID', just weight/volume of the dumped waste). Validated
+    2026-06-22 on real labeled visits: pees 39-76, the one poop 140 — a clean gap
+    around 100. Returns 'pee' | 'poop' | None (unknown). Boundary values (~80-100)
+    are best-guess; tighten the threshold as more poop samples accumulate."""
+    if use_record is None:
+        return None
+    return "poop" if use_record >= poop_threshold else "pee"
+
+
 def label(k):
     """Human-readable name for a DP key (string or int); falls back to dp<k>."""
     try:

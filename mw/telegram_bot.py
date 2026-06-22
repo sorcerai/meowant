@@ -62,8 +62,9 @@ def _post_photo(token, chat_id, path, caption=None, reply_markup=None):
     urllib.request.urlopen(req, timeout=20)
 
 
-def send_label_request(token, chat_id, vid, frame_paths, cats, when):
-    """Up to 3 photos, then a buttons message asking who used the box."""
+def send_label_request(token, chat_id, vid, frame_paths, cats, when, waste=""):
+    """Up to 3 photos, then a buttons message asking who used the box. `waste` is an
+    optional ' — pee 💧' / ' — poop 💩' suffix."""
     import os
     for p in [p for p in frame_paths if os.path.exists(p)][:3]:
         try:
@@ -76,7 +77,7 @@ def send_label_request(token, chat_id, vid, frame_paths, cats, when):
         {"text": "skip", "callback_data": f"lbl:{vid}:skip"}]]}
     try:
         _http_send_markup(token, chat_id,
-                          f"🐈 Who used the box at {when}? (couldn't auto-ID)", markup)
+                          f"🐈 Who used the box at {when}?{waste} (couldn't auto-ID)", markup)
     except Exception as e:
         print(f"[telegram] label-request failed: {e}", file=sys.stderr)
 

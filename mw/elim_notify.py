@@ -8,11 +8,14 @@ import sys
 import time
 
 from mw import store
+from mw.decode import classify_waste
+
+_WASTE_MARK = {"pee": " — pee 💧", "poop": " — poop 💩"}
 
 
 class EliminationNotifier:
     def __init__(self, conn, labeler, notify, now_fn=time.time,
-                 settle_s=15, interval=30, sample=5, ask_who=None):
+                 settle_s=15, interval=30, sample=5, ask_who=None, poop_threshold=100):
         self.conn = conn
         self.labeler = labeler            # has .label_visit(vid, sample=...)
         self.notify = notify
@@ -20,14 +23,19 @@ class EliminationNotifier:
         self.settle_s = settle_s          # wait this long after close (frames settle)
         self.interval = interval
         self.sample = sample              # frames to label for a FAST id (not all ~36)
-        self.ask_who = ask_who            # optional (vid, paths, when) -> None
+        self.ask_who = ask_who            # optional (vid, paths, when, waste) -> None
+        self.poop_threshold = poop_threshold  # dp102 use_record split: pee < t <= poop
+
+    def _waste_mark(self, visit):
+        return _WASTE_MARK.get(classify_waste(visit.get("use_record"), self.poop_threshold), "")
 
     def _alert_text(self, visit):
         cat = store.cat_name_by_id(self.conn, visit["cat_id"]) if visit["cat_id"] else None
         when = time.strftime("%H:%M", time.localtime(self.now()))
+        mark = self._waste_mark(visit)
         if cat:
-            return f"🐈 {cat} used the box [{when}]"
-        return f"🐈 A cat used the box (couldn't ID — likely in-box) [{when}]"
+            return f"🐈 {cat} used the box{mark} [{when}]"
+        return f"🐈 A cat used the box{mark} (couldn't ID — likely in-box) [{when}]"
 
     def run_once(self):
         before = store._iso(self.now() - self.settle_s)
@@ -50,7 +58,7 @@ class EliminationNotifier:
                         paths = store.capture_paths_around(self.conn, anchor, window_s=120)
                 when = time.strftime("%H:%M", time.localtime(self.now()))
                 if paths:
-                    self.ask_who(v["id"], paths, when)
+                    self.ask_who(v["id"], paths, when, self._waste_mark(fresh))
                 else:
                     self.notify(self._alert_text(fresh))   # nothing to show — plain text
             else:

@@ -104,7 +104,8 @@ def main():
 
         from mw.elim_notify import EliminationNotifier
         elim_notifier = EliminationNotifier(
-            conn, autolabeler, notify=make_notify(lambda k: config.get(cfg, k)))
+            conn, autolabeler, notify=make_notify(lambda k: config.get(cfg, k)),
+            poop_threshold=config.get(cfg, "alerts.poop_threshold", 100))
         threading.Thread(target=elim_notifier.run, daemon=True).start()
         print("elim-notifier: named 'who used the box' alerts (label-on-leave)")
 
@@ -187,8 +188,8 @@ def main():
         print("telegram-bot: inbound commands (/cats /status /health), owner-allowlisted")
         # Wire the photo-prompt into the notifier (only when both cameras AND Telegram are configured)
         if 'elim_notifier' in locals():
-            elim_notifier.ask_who = lambda vid, paths, when: send_label_request(
-                tg_token, tg_chat, vid, paths, _valid_cats, when)
+            elim_notifier.ask_who = lambda vid, paths, when, waste="": send_label_request(
+                tg_token, tg_chat, vid, paths, _valid_cats, when, waste)
 
     app = create_app(daemon, conn, bus=bus)
     print("meowantd → http://0.0.0.0:8765  (smart-clean idle="

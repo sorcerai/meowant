@@ -69,3 +69,11 @@ def test_real_calibration_pair():
     # the discriminating test: fires on the real messy floor, silent on clean
     assert scatter.score([_MESSY], _CLEAN, consensus=1)["severity"] >= 2
     assert scatter.score([_CLEAN], _CLEAN, consensus=1)["severity"] == 0
+
+
+def test_classify_waste_threshold():
+    from mw.decode import classify_waste
+    assert classify_waste(65) == "pee"      # validated pee range
+    assert classify_waste(140) == "poop"    # validated poop
+    assert classify_waste(None) is None
+    assert classify_waste(100) == "poop"    # boundary == threshold -> poop

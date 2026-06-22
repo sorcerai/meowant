@@ -62,7 +62,7 @@ def test_unidentified_triggers_ask_who(tmp_path):
     from mw.elim_notify import EliminationNotifier
     n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
                             now_fn=lambda: 10_000.0, settle_s=15,
-                            ask_who=lambda vid, paths, when: asked.append(vid))
+                            ask_who=lambda vid, paths, when, waste='': asked.append(vid))
     v = store.open_visit(conn, 9_000.0); store.mark_elimination(conn, v, 55)
     store.insert_capture(conn, 9_100.0, v, "cam", "/g/x.jpg")
     store.close_visit(conn, v, 9_900.0, 900)
@@ -80,7 +80,7 @@ def test_frameless_visit_recovers_window_photos(tmp_path):
     from mw.elim_notify import EliminationNotifier
     n = EliminationNotifier(conn, _Labeler(conn, None), notify=lambda m: None,
                             now_fn=lambda: 10_000.0, settle_s=15,
-                            ask_who=lambda vid, paths, when: asked.update(vid=vid, paths=paths))
+                            ask_who=lambda vid, paths, when, waste='': asked.update(vid=vid, paths=paths))
     # a sibling fragment dropped frames just before
     store.insert_capture(conn, 9_880.0, 1, "cam", "/g/sib.jpg")
     v = store.open_visit(conn, 9_900.0); store.mark_elimination(conn, v, 55)
@@ -95,9 +95,22 @@ def test_frameless_with_no_window_photos_falls_back_to_text(tmp_path):
     called = []
     n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
                             now_fn=lambda: 10_000.0, settle_s=15,
-                            ask_who=lambda vid, paths, when: called.append(vid))
+                            ask_who=lambda vid, paths, when, waste='': called.append(vid))
     v = store.open_visit(conn, 9_900.0); store.mark_elimination(conn, v, 55)
     store.close_visit(conn, v, 9_905.0, 5)   # no captures anywhere
     n.run_once()
     assert called == []                       # ask_who NOT used (no photos)
     assert any("couldn't ID" in m for m in sent)   # plain text instead
+
+
+def test_alert_marks_pee_vs_poop(tmp_path):
+    conn, _, _ = _setup(tmp_path, cat="Ucok")
+    from mw.elim_notify import EliminationNotifier
+    n = EliminationNotifier(conn, _Labeler(conn, "Ucok"), notify=lambda m: None,
+                            now_fn=lambda: 10_000.0, poop_threshold=100)
+    pee = n._alert_text({"cat_id": store.cat_id_by_name(conn, "Ucok"), "use_record": 65})
+    poop = n._alert_text({"cat_id": store.cat_id_by_name(conn, "Ucok"), "use_record": 140})
+    unknown = n._alert_text({"cat_id": store.cat_id_by_name(conn, "Ucok"), "use_record": None})
+    assert "pee" in pee and "💧" in pee
+    assert "poop" in poop and "💩" in poop
+    assert "pee" not in unknown and "poop" not in unknown   # no marker when unknown
