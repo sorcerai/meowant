@@ -132,6 +132,21 @@ def main():
                          daemon=True)
     t.start()
 
+    from mw.health_watch import HealthWatch, Heartbeat
+    hw = HealthWatch(
+        conn, make_notify(lambda k: config.get(cfg, k)),
+        no_go_hours=config.get(cfg, "health.no_go_hours", 12),
+        digest_hour=config.get(cfg, "health.digest_hour", 9),
+        interval=config.get(cfg, "health.check_interval_s", 1800))
+    threading.Thread(target=hw.run, daemon=True).start()
+    print("health-watch: no-go alarm + daily digest")
+
+    hb_url = config.get(cfg, "health.heartbeat_url", "")
+    if hb_url:
+        hb = Heartbeat(hb_url, interval=config.get(cfg, "health.heartbeat_interval_s", 900))
+        threading.Thread(target=hb.run, daemon=True).start()
+        print("heartbeat: external dead-man's-switch ping")
+
     # Inbound Telegram commands (/cats /status /health) — allowlisted to the owner
     # chat. Only starts if Telegram creds are configured.
     tg_token = config.get(cfg, "alerts.telegram_bot_token")

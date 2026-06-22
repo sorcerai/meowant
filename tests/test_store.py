@@ -98,6 +98,17 @@ def test_sync_visit_cat_no_labels_is_noop(tmp_path):
     assert row["cat_id"] is None
 
 
+def test_last_elimination_ts(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    assert store.last_elimination_ts(conn) is None        # empty DB
+    v1 = store.open_visit(conn, 1000.0); store.mark_elimination(conn, v1, 55)
+    store.close_visit(conn, v1, 1060.0, 60)
+    v2 = store.open_visit(conn, 5000.0)                    # later but NOT eliminated
+    store.close_visit(conn, v2, 5005.0, 5)
+    ts = store.last_elimination_ts(conn)
+    assert ts == store._iso(1000.0)                        # the eliminated one
+
+
 def test_set_capture_label_syncs_visit(tmp_path):
     # a HUMAN label must also update the visit row, not just the capture
     conn = store.connect(str(tmp_path / "t.db"))

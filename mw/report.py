@@ -86,3 +86,20 @@ def status_report(conn, state):
              f"• bin: {'FULL ⚠️' if bin_full else 'ok'}",
              f"• fault: {'E'+str(fault)+' ⚠️' if fault else 'none'}"]
     return "\n".join(parts)
+
+
+def digest(conn, now=None):
+    """One-line-ish 'alive + today' summary for the daily heartbeat digest."""
+    from datetime import date, datetime
+    now = now if now is not None else datetime.now().timestamp()
+    today = date.fromtimestamp(now).isoformat()
+    sess = store.sessions(conn)
+    today_elim = [s for s in sess if s["eliminated"] and s["enter_ts"].startswith(today)]
+    if not today_elim:
+        return f"✅ Meowant alive [{today}] — no box uses yet today."
+    from collections import Counter
+    by_cat = Counter((s["cat"] or "unattributed") for s in today_elim)
+    last = max(s["enter_ts"] for s in today_elim)[11:16]
+    parts = ", ".join(f"{c} {n}" for c, n in by_cat.most_common())
+    return (f"✅ Meowant alive [{today}] — {len(today_elim)} box uses today "
+            f"(last {last}). {parts}")

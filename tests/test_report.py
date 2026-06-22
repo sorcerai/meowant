@@ -50,3 +50,15 @@ def test_status_report_reads_state():
     txt = report.status_report(conn, {"24": "standby", "21": 1, "22": 2})
     assert "standby" in txt
     assert "FULL" in txt and "E2" in txt
+
+
+def test_digest_summarizes_today(tmp_path):
+    import time
+    from datetime import date
+    conn = _db()
+    now = time.time()
+    v = store.open_visit(conn, now); store.mark_elimination(conn, v, 55)
+    store.close_visit(conn, v, now + 60, 60)
+    store.set_visit_identity(conn, v, store.cat_id_by_name(conn, "Ucok"), 1.0)
+    txt = report.digest(conn, now=now + 120)
+    assert "Ucok" in txt and ("1" in txt)

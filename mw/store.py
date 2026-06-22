@@ -99,6 +99,15 @@ def mark_elimination(conn, visit_id, use_record=None):
         conn.commit()
 
 
+def last_elimination_ts(conn):
+    """enter_ts of the most recent eliminated visit, or None — drives the no-go alarm."""
+    with _lock:
+        row = conn.execute(
+            "SELECT enter_ts FROM visits WHERE eliminated=1 "
+            "ORDER BY enter_ts DESC LIMIT 1").fetchone()
+        return row["enter_ts"] if row else None
+
+
 def recent_visits(conn, limit=20):
     with _lock:
         cur = conn.execute("SELECT * FROM visits ORDER BY id DESC LIMIT ?", (limit,))
