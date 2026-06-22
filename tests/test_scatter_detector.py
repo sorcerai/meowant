@@ -185,3 +185,10 @@ def test_core_on_real_pair(tmp_path):
     det, notes = _detector(conn, str(tmp_path))
     result, msg = det.score_and_record(vid, _CLEAN, [_MESSY])
     assert result["severity"] >= 2 and msg is not None and len(notes) == 1
+
+
+def test_zone_label_in_alert(tmp_path):
+    det, _ = _detector(conn=_db(), out_dir=str(tmp_path), presence_fn=lambda: False,
+                       visit_resolver=lambda: None, zone_label="Garfield's fling zone")
+    msg = det._format_alert({"severity": 3, "changed_pct": 12.0})
+    assert "Garfield's fling zone" in msg and "sweep" in msg.lower()

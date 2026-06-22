@@ -35,7 +35,8 @@ class ScatterDetector:
                  threshold=1, min_duration_s=20,
                  post_leave_delay_s=8, post_frames=3, post_interval_s=2.0,
                  ref_interval_s=45, roi=None,
-                 delta=22, min_blob=40, consensus=2):
+                 delta=22, min_blob=40, consensus=2, zone_label="the apron"):
+        self.zone_label = zone_label   # named in the alert (apron vs fling zone)
         self.bus = bus
         self.conn = conn
         self.cam_url = cam_url
@@ -131,8 +132,8 @@ class ScatterDetector:
     def _format_alert(self, result):
         word = _SEVERITY_WORD.get(result["severity"], "")
         ts = time.strftime("%H:%M")
-        return (f"🧹 Time to sweep — {word} litter scatter on the floor "
-                f"({result['changed_pct']}% of the apron) [{ts}]")
+        return (f"🧹 Time to sweep — {word} litter scatter in {self.zone_label} "
+                f"({result['changed_pct']}%) [{ts}]")
 
     def score_and_record(self, visit_id, ref_path, post_paths):
         """Score the post-leave frames against the pinned reference, persist the

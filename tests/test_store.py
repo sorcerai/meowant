@@ -220,3 +220,13 @@ def test_human_mark_no_cat_clears_elimination(tmp_path):
     store.human_mark_no_cat(conn, v)
     row = store.get_visit(conn, v)
     assert row["eliminated"] == 0 and row["use_record"] is None   # false trigger un-counted
+
+
+def test_set_visit_scatter_keeps_worst(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    v = store.open_visit(conn, 1000.0)
+    store.set_visit_scatter(conn, v, 1, 0.9, 40)        # apron: light
+    store.set_visit_scatter(conn, v, 3, 11.0, 500)      # fling zone: heavy -> wins
+    assert store.get_visit(conn, v)["scatter_severity"] == 3
+    store.set_visit_scatter(conn, v, 1, 0.5, 20)        # a later lighter score must NOT clobber
+    assert store.get_visit(conn, v)["scatter_severity"] == 3

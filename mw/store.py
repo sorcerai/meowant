@@ -408,11 +408,15 @@ def get_visit(conn, visit_id):
 
 
 def set_visit_scatter(conn, visit_id, severity, pct, area):
-    """Record the per-visit litter-scatter score (post-leave meowcam3 floor delta)."""
+    """Record the per-visit litter-scatter score. KEEPS THE WORST zone: two detectors
+    (apron via meowcam3 + fling zone via meowcam4) both score the same visit, so only
+    overwrite when this severity is higher — the visit row reflects the worst scatter
+    seen, and the writes are order-independent."""
     with _lock:
         conn.execute(
-            "UPDATE visits SET scatter_severity=?, scatter_pct=?, scatter_area=? WHERE id=?",
-            (severity, pct, area, visit_id))
+            "UPDATE visits SET scatter_severity=?, scatter_pct=?, scatter_area=? "
+            "WHERE id=? AND (scatter_severity IS NULL OR scatter_severity < ?)",
+            (severity, pct, area, visit_id, severity))
         conn.commit()
 
 

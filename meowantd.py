@@ -110,20 +110,34 @@ def main():
 
         # Litter-scatter detector: per-visit floor delta on meowcam3 (pin a clean
         # reference at cat-enter, score post-leave frames) -> 'time to sweep' alert.
-        m3 = next((c for c in cams if c["name"] == "meowcam3"), None)
-        if m3 and config.get(cfg, "scatter.enabled", True):
-            from mw.scatter_detector import ScatterDetector
+        from mw.scatter_detector import ScatterDetector
+
+        def _start_scatter(cam, out_dir, zone_label, threshold, roi=None):
             scat = ScatterDetector(
-                bus, conn, m3["url"], "gallery/scatter",
+                bus, conn, cam["url"], out_dir,
                 notify=make_notify(lambda k: config.get(cfg, k)),
                 presence_fn=lambda: daemon.state.get("24") == "cat_get_in",
                 visit_resolver=lambda: store.latest_open_visit_id(conn),
                 clear_fn=catfilter.is_clear,   # reject frames with a cat/dog/person on the floor
-                threshold=config.get(cfg, "scatter.severity_threshold", 1),
                 min_duration_s=config.get(cfg, "scatter.min_duration_s", 20),
-                post_leave_delay_s=config.get(cfg, "scatter.post_leave_delay_s", 12))
+                post_leave_delay_s=config.get(cfg, "scatter.post_leave_delay_s", 12),
+                threshold=threshold, roi=roi, zone_label=zone_label)
             threading.Thread(target=scat.run, daemon=True).start()
-            print("scatter-detector: meowcam3 floor delta + 'time to sweep' alert")
+            print(f"scatter-detector: {cam['name']} -> {zone_label} (threshold {threshold})")
+
+        m3 = next((c for c in cams if c["name"] == "meowcam3"), None)
+        if m3 and config.get(cfg, "scatter.enabled", True):
+            _start_scatter(m3, "gallery/scatter", "the apron",
+                           config.get(cfg, "scatter.severity_threshold", 1))
+
+        # 2nd zone: meowcam4 covers Garfield's preferred fling spot. Threshold left
+        # conservative (2) until its clean/messy reference is calibrated post-sweep.
+        m4 = next((c for c in cams if c["name"] == "meowcam4"), None)
+        if m4 and config.get(cfg, "scatter.m4_enabled", True):
+            _start_scatter(m4, "gallery/scatter_m4", "Garfield's fling zone",
+                           config.get(cfg, "scatter.m4_severity_threshold", 2),
+                           roi=tuple(config.get(cfg, "scatter.m4_roi",
+                                                 [0.22, 0.48, 0.62, 0.95])))
 
     # Poll interval: 2s (was 3s) to better catch brief visits that fall between
     # polls (e.g. Ucok's in-and-out). Configurable via poll_interval_s.
