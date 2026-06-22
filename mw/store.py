@@ -424,6 +424,22 @@ def per_cat_scatter(conn):
         return [dict(r) for r in cur.fetchall()]
 
 
+def human_attribute_visit(conn, visit_id, cat_id):
+    """Attribute a whole visit to a cat from a HUMAN decision (the Telegram tap
+    when auto-ID failed). Writes the human label on the visit's first capture, which
+    (a) syncs visits.cat_id via set_capture_label and (b) makes visit_established_cat
+    return this cat so the auto-labeler never overrides it. Returns False if the
+    visit has no captures."""
+    with _lock:
+        row = conn.execute(
+            "SELECT id FROM captures WHERE visit_id=? ORDER BY id LIMIT 1",
+            (visit_id,)).fetchone()
+    if row is None:
+        return False
+    set_capture_label(conn, row["id"], cat_id, source="human")  # syncs the visit too
+    return True
+
+
 def sync_visit_cat(conn, visit_id):
     """Attribute the VISIT to a cat from the MAJORITY of its labeled captures
     (captures.label is the source of truth). Confidence = agreement ratio.

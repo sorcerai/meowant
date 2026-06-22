@@ -170,3 +170,22 @@ def test_pending_and_mark_notified(tmp_path):
 
     store.mark_notified(conn, v1)
     assert store.pending_elimination_notifications(conn, before) == []   # v1 cleared
+
+
+def test_human_attribute_visit(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella"])
+    vid = store.open_visit(conn, 1000.0); store.mark_elimination(conn, vid, 55)
+    store.insert_capture(conn, 1000.0, vid, "cam", "/g/a.jpg")
+    store.insert_capture(conn, 1001.0, vid, "cam", "/g/b.jpg")
+    eid = store.cat_id_by_name(conn, "Ella")
+    assert store.human_attribute_visit(conn, vid, eid) is True
+    # visit attributed to Ella, and it's human-established (auto-labeler won't override)
+    assert store.get_visit(conn, vid)["cat_id"] == eid
+    assert store.visit_established_cat(conn, vid) == "Ella"
+
+def test_human_attribute_visit_no_captures(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ella"])
+    vid = store.open_visit(conn, 1000.0)
+    assert store.human_attribute_visit(conn, vid, store.cat_id_by_name(conn, "Ella")) is False

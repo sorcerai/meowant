@@ -63,3 +63,43 @@ def test_handler_exception_is_caught():
     bot, sent = _bot(handlers={"/cats": boom})
     n = bot.process([_update(1, 100, "/cats")])
     assert n == 1 and "failed" in sent[0][1].lower()   # bot survives, owner told
+
+
+def test_callback_tap_dispatches_label():
+    labeled = []
+    sent = []
+    from mw.telegram_bot import TelegramBot
+    bot = TelegramBot("tok", "100", {}, getter=lambda *a: [],
+                      sender=lambda t, c, m: sent.append((c, m)),
+                      label_cb=lambda vid, cat: labeled.append((vid, cat)) or f"✓ {cat}")
+    upd = {"update_id": 1, "callback_query": {
+        "id": "cbq1", "from": {"id": 100},
+        "message": {"message_id": 9, "chat": {"id": 100}},
+        "data": "lbl:54:Ella"}}
+    bot.process([upd])
+    assert labeled == [(54, "Ella")]
+    assert any("✓ Ella" in m for _, m in sent)
+
+def test_callback_tap_allowlist_blocks_stranger():
+    labeled = []
+    from mw.telegram_bot import TelegramBot
+    bot = TelegramBot("tok", "100", {}, getter=lambda *a: [],
+                      sender=lambda t, c, m: None,
+                      label_cb=lambda vid, cat: labeled.append((vid, cat)) or "ok")
+    upd = {"update_id": 1, "callback_query": {
+        "id": "x", "from": {"id": 999},
+        "message": {"message_id": 9, "chat": {"id": 999}}, "data": "lbl:54:Ella"}}
+    bot.process([upd])
+    assert labeled == []                     # stranger's tap ignored
+
+def test_callback_skip_does_not_label():
+    labeled = []
+    from mw.telegram_bot import TelegramBot
+    bot = TelegramBot("tok", "100", {}, getter=lambda *a: [],
+                      sender=lambda t, c, m: None,
+                      label_cb=lambda vid, cat: labeled.append((vid, cat)) or "ok")
+    upd = {"update_id": 1, "callback_query": {
+        "id": "x", "from": {"id": 100},
+        "message": {"message_id": 9, "chat": {"id": 100}}, "data": "lbl:54:skip"}}
+    bot.process([upd])
+    assert labeled == []                     # skip is a no-op label-wise

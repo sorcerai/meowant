@@ -137,16 +137,26 @@ def main():
     tg_token = config.get(cfg, "alerts.telegram_bot_token")
     tg_chat = config.get(cfg, "alerts.telegram_chat_id")
     if tg_token and tg_chat:
-        from mw.telegram_bot import TelegramBot
+        from mw.telegram_bot import TelegramBot, send_label_request
         from mw import report
+        _valid_cats = [c for c in store.gallery_counts(conn).keys()]
+        def _label_cb(vid, cat):
+            cid = store.cat_id_by_name(conn, cat)
+            if cid and store.human_attribute_visit(conn, vid, cid):
+                return f"✓ Visit {vid} labeled {cat}"
+            return f"⚠️ Couldn't label visit {vid} as {cat}"
         bot = TelegramBot(tg_token, tg_chat, {
             "/cats": lambda: report.cat_report(conn),
             "/status": lambda: report.status_report(conn, daemon.state),
             "/health": lambda: report.health_report(conn),
             "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health",
-        })
+        }, label_cb=_label_cb)
         threading.Thread(target=bot.run, daemon=True).start()
         print("telegram-bot: inbound commands (/cats /status /health), owner-allowlisted")
+        # Wire the photo-prompt into the notifier (only when both cameras AND Telegram are configured)
+        if 'elim_notifier' in locals():
+            elim_notifier.ask_who = lambda vid, paths, when: send_label_request(
+                tg_token, tg_chat, vid, paths, _valid_cats, when)
 
     app = create_app(daemon, conn, bus=bus)
     print("meowantd → http://0.0.0.0:8765  (smart-clean idle="

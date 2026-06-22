@@ -53,3 +53,20 @@ def test_recent_visit_waits_for_settle(tmp_path):
     store.close_visit(conn, v, 9_995.0, 5)          # closed 5s before now < settle 15s
     n.run_once()
     assert sent == []                               # too fresh, not yet alerted
+
+
+def test_unidentified_triggers_ask_who(tmp_path):
+    conn, _, sent = _setup(tmp_path, cat=None)
+    asked = []
+    # rebuild notifier with ask_who
+    from mw.elim_notify import EliminationNotifier
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0, settle_s=15,
+                            ask_who=lambda vid, paths, when: asked.append(vid))
+    v = store.open_visit(conn, 9_000.0); store.mark_elimination(conn, v, 55)
+    store.insert_capture(conn, 9_100.0, v, "cam", "/g/x.jpg")
+    store.close_visit(conn, v, 9_900.0, 900)
+    n.run_once()
+    assert asked == [v]                      # prompt fired
+    assert sent == []                        # no dead-end text
+    assert store.get_visit(conn, v)["notified"] == 1

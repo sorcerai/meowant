@@ -12,7 +12,7 @@ from mw import store
 
 class EliminationNotifier:
     def __init__(self, conn, labeler, notify, now_fn=time.time,
-                 settle_s=15, interval=30, sample=5):
+                 settle_s=15, interval=30, sample=5, ask_who=None):
         self.conn = conn
         self.labeler = labeler            # has .label_visit(vid, sample=...)
         self.notify = notify
@@ -20,6 +20,7 @@ class EliminationNotifier:
         self.settle_s = settle_s          # wait this long after close (frames settle)
         self.interval = interval
         self.sample = sample              # frames to label for a FAST id (not all ~36)
+        self.ask_who = ask_who            # optional (vid, paths, when) -> None
 
     def _alert_text(self, visit):
         cat = store.cat_name_by_id(self.conn, visit["cat_id"]) if visit["cat_id"] else None
@@ -36,7 +37,14 @@ class EliminationNotifier:
             except Exception as e:
                 print(f"[elim-notify] label {v['id']} failed: {e}", file=sys.stderr)
             fresh = store.get_visit(self.conn, v["id"]) or v   # re-read post-label cat_id
-            self.notify(self._alert_text(fresh))
+            cat_id = fresh["cat_id"]
+            if cat_id:
+                self.notify(self._alert_text(fresh))
+            elif self.ask_who is not None:
+                paths = [c["path"] for c in store.captures_for_visit(self.conn, v["id"])]
+                self.ask_who(v["id"], paths, time.strftime("%H:%M", time.localtime(self.now())))
+            else:
+                self.notify(self._alert_text(fresh))     # fallback: dead-end text
             store.mark_notified(self.conn, v["id"])
 
     def run(self):
