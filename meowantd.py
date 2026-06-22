@@ -78,6 +78,22 @@ def main():
         print("auto-labeler: agy backend + cross-frame gate "
               f"(every {config.get(cfg, 'autolabel.interval_s', 900)}s)")
 
+        # Litter-scatter detector: per-visit floor delta on meowcam3 (pin a clean
+        # reference at cat-enter, score post-leave frames) -> 'time to sweep' alert.
+        m3 = next((c for c in cams if c["name"] == "meowcam3"), None)
+        if m3 and config.get(cfg, "scatter.enabled", True):
+            from mw.scatter_detector import ScatterDetector
+            scat = ScatterDetector(
+                bus, conn, m3["url"], "gallery/scatter",
+                notify=make_notify(lambda k: config.get(cfg, k)),
+                presence_fn=lambda: daemon.state.get("24") == "cat_get_in",
+                visit_resolver=lambda: store.latest_open_visit_id(conn),
+                threshold=config.get(cfg, "scatter.severity_threshold", 1),
+                min_duration_s=config.get(cfg, "scatter.min_duration_s", 20),
+                post_leave_delay_s=config.get(cfg, "scatter.post_leave_delay_s", 8))
+            threading.Thread(target=scat.run, daemon=True).start()
+            print("scatter-detector: meowcam3 floor delta + 'time to sweep' alert")
+
     # Poll interval: 2s (was 3s) to better catch brief visits that fall between
     # polls (e.g. Ucok's in-and-out). Configurable via poll_interval_s.
     t = threading.Thread(target=daemon.run,

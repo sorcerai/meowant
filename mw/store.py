@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS captures(
 # Columns added after the initial schema shipped; applied idempotently on init.
 _MIGRATIONS = [
     ("captures", "label_source", "TEXT"),
+    ("visits", "scatter_severity", "INTEGER"),  # 0-3 litter-scatter score (meowcam3 floor delta)
+    ("visits", "scatter_pct", "REAL"),          # changed-% of the apron ROI
+    ("visits", "scatter_area", "INTEGER"),       # scatter blob area, px
 ]
 
 
@@ -307,6 +310,39 @@ def set_visit_identity(conn, visit_id, cat_id, confidence):
         conn.execute("UPDATE visits SET cat_id=?, confidence=? WHERE id=?",
                      (cat_id, confidence, visit_id))
         conn.commit()
+
+
+def get_visit(conn, visit_id):
+    """The full visit row as a dict, or None."""
+    with _lock:
+        row = conn.execute("SELECT * FROM visits WHERE id=?", (visit_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def set_visit_scatter(conn, visit_id, severity, pct, area):
+    """Record the per-visit litter-scatter score (post-leave meowcam3 floor delta)."""
+    with _lock:
+        conn.execute(
+            "UPDATE visits SET scatter_severity=?, scatter_pct=?, scatter_area=? WHERE id=?",
+            (severity, pct, area, visit_id))
+        conn.commit()
+
+
+def per_cat_scatter(conn):
+    """Per-cat scatter blame — the 'who keeps making the mess' tally. For each
+    cat with at least one scored visit: how many visits were scored, how many
+    were actual scatter (severity>=1), and the average changed-%. Derived from
+    visits.cat_id (set by the labeler) joined to the per-visit scatter score, so
+    it only firms up once a visit is attributed. Ordered worst-first."""
+    with _lock:
+        cur = conn.execute(
+            "SELECT c.name AS name, COUNT(v.id) AS scored, "
+            "  SUM(CASE WHEN v.scatter_severity>=1 THEN 1 ELSE 0 END) AS messes, "
+            "  AVG(v.scatter_pct) AS avg_pct "
+            "FROM cats c JOIN visits v ON v.cat_id=c.id "
+            "WHERE v.scatter_severity IS NOT NULL "
+            "GROUP BY c.id ORDER BY messes DESC, avg_pct DESC")
+        return [dict(r) for r in cur.fetchall()]
 
 
 def sync_visit_cat(conn, visit_id):
