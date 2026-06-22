@@ -2,6 +2,7 @@
 import queue
 import shutil
 import subprocess
+import urllib.parse
 import urllib.request
 
 from mw.events import BIN_FULL, CHUTE_FULL, FAULT, ELIMINATION
@@ -39,8 +40,27 @@ def ntfy_notify(msg, topic, server="https://ntfy.sh"):
         print(f"[alert] ntfy failed ({e}); msg: {msg}")
 
 
+def telegram_notify(msg, token, chat_id):
+    """Push via the Telegram Bot API. Messages carry an absolute send time in the
+    client, so (unlike ntfy) the 'when' never collapses to a vague 'yesterday'."""
+    try:
+        data = urllib.parse.urlencode(
+            {"chat_id": chat_id, "text": msg}).encode("utf-8")
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=data, method="POST")
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        print(f"[alert] telegram failed ({e}); msg: {msg}")
+
+
 def make_notify(cfg_get):
-    """Pick the notify transport from config: ntfy (phone) if alerts.ntfy_topic set, else macOS."""
+    """Pick the notify transport from config, best-channel first: Telegram (if a bot
+    token + chat_id are set) > ntfy (if a topic is set) > macOS desktop."""
+    token = cfg_get("alerts.telegram_bot_token")
+    chat_id = cfg_get("alerts.telegram_chat_id")
+    if token and chat_id:
+        return lambda m: telegram_notify(m, token, chat_id)
     topic = cfg_get("alerts.ntfy_topic")
     if topic:
         return lambda m: ntfy_notify(m, topic)
