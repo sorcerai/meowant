@@ -104,6 +104,84 @@ def recent_visits(conn, limit=20):
         return [dict(r) for r in cur.fetchall()]
 
 
+def _parse_ts(s):
+    # DB stamps are naive local-ISO (see _iso); one legacy row may carry a tz — drop it.
+    return datetime.fromisoformat(s).replace(tzinfo=None)
+
+
+def _can_merge(s, v, gap_s):
+    if s["leave_ts"] is None or v["enter_ts"] is None:
+        return False
+    gap = max(0.0, (_parse_ts(v["enter_ts"]) - _parse_ts(s["leave_ts"])).total_seconds())
+    if gap >= gap_s:
+        return False
+    sc, vc = s["cat_id"], v["cat_id"]
+    if sc is not None and vc is not None and sc != vc:
+        return False
+    return bool(s["eliminated"]) != bool(v["eliminated"])   # exactly one dp102 anchor
+
+
+def _new_session(v):
+    return {
+        "visit_ids": [v["id"]],
+        "enter_ts": v["enter_ts"],
+        "leave_ts": v["leave_ts"],
+        "duration_s": v["duration_s"] or 0,
+        "cat_id": v["cat_id"],
+        "cat": None,   # resolved in sessions() after folding
+        "eliminated": int(bool(v["eliminated"])),
+        "use_record": v["use_record"],
+        "scatter_severity": v["scatter_severity"],
+        "scatter_pct": v["scatter_pct"],
+        "n_fragments": 1,
+    }
+
+
+def _absorb(s, v):
+    s["visit_ids"].append(v["id"])
+    s["leave_ts"] = v["leave_ts"]
+    if s["leave_ts"] is not None:
+        s["duration_s"] = int(
+            (_parse_ts(s["leave_ts"]) - _parse_ts(s["enter_ts"])).total_seconds())
+    s["eliminated"] = int(s["eliminated"] or bool(v["eliminated"]))
+    if s["cat_id"] is None and v["cat_id"] is not None:
+        s["cat_id"] = v["cat_id"]
+    if s["use_record"] is None:
+        s["use_record"] = v["use_record"]
+    vs = v["scatter_severity"]
+    if vs is not None and (s["scatter_severity"] is None or vs > s["scatter_severity"]):
+        s["scatter_severity"] = vs
+        s["scatter_pct"] = v["scatter_pct"]
+    s["n_fragments"] = len(s["visit_ids"])
+
+
+def sessions(conn, gap_s=30):
+    """Collapse IR-flicker visit fragments into logical sessions WITHOUT mutating any
+    row. Two fragments merge only when a single dp102 elimination anchors them (XOR on
+    `eliminated`) and they are close in time (< gap_s) and cat-compatible. This keeps a
+    senior cat's weight-shift flicker as one trip, while a gaming cat's no-elimination
+    blips and two genuinely separate pees stay distinct. Read-time so the async vision
+    cat_id is available. Newest-first, like recent_visits."""
+    with _lock:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM visits ORDER BY enter_ts ASC, id ASC").fetchall()]
+
+    out = []          # sessions, oldest-first while folding
+    for v in rows:
+        s = out[-1] if out else None
+        if s is not None and _can_merge(s, v, gap_s):
+            _absorb(s, v)
+        else:
+            out.append(_new_session(v))
+
+    # Resolve cat names after folding (conn-free _absorb can't call cat_name_by_id)
+    for s in out:
+        s["cat"] = cat_name_by_id(conn, s["cat_id"]) if s["cat_id"] else None
+
+    out.reverse()     # newest-first
+    return out
+
+
 def eliminations_today(conn, day=None):
     """Count today's eliminations from OUR tracking (dp102-driven) — the box's
     own dp7 counter is unreliable. day defaults to the local date."""
