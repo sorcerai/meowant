@@ -92,10 +92,16 @@ class AutoLabeler:
         return {"visit": vid, "status": d["status"], "cat": d["cat"],
                 "applied": len(d["apply"]), "cats": d["cats"], "filtered": len(empty_rows)}
 
-    def label_visit(self, vid, dry_run=False):
+    def label_visit(self, vid, dry_run=False, sample=None):
         """Label ONE visit's still-untouched frames now (used by the elimination
         notifier for label-on-leave, so the cat name resolves in seconds rather than
-        waiting for the next full sweep). Returns the summary, or None if nothing to do."""
+        waiting for the next full sweep). Returns the summary, or None if nothing to do.
+
+        `sample` (the alert path) labels only N frames spread across the visit instead
+        of all of them — agy is one subprocess PER FRAME (~slow), so a 36-frame visit
+        would take minutes and block the caller. A handful of evenly-spaced frames
+        (entry..exit, the most ID-friendly moments) names the cat in ~a minute; the
+        full 15-min sweep finishes the rest later for gallery completeness."""
         if not self.valid_cats:
             return None
         groups = store.captures_by_visit(self.conn, [vid])
@@ -103,6 +109,10 @@ class AutoLabeler:
                 if r["label"] is None and r["label_source"] is None]
         if not rows:
             return None
+        if sample and len(rows) > sample:
+            n = len(rows)   # even spread incl. first & last (entry/exit see the face)
+            idx = sorted({round(i * (n - 1) / (sample - 1)) for i in range(sample)})
+            rows = [rows[j] for j in idx]
         return self._process_visit(vid, rows, dry_run)
 
     def run_once(self, dry_run=False):

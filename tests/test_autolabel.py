@@ -365,3 +365,29 @@ def test_label_visit_attributes_single_visit(tmp_path):
     res = al.label_visit(vid)
     assert res["cat"] == "Ucok"
     assert store.cat_name_by_id(conn, store.get_visit(conn, vid)["cat_id"]) == "Ucok"
+
+
+def test_label_visit_sample_limits_frames(tmp_path):
+    # sample=2 must send only 2 of many frames to the (slow) backend; the rest
+    # stay untouched for the full sweep to finish later.
+    from mw import store
+    from mw.autolabel import AutoLabeler
+
+    class _CountingLabeler:
+        def __init__(self): self.seen = 0
+        def predict_visit(self, paths, refs):
+            self.seen += len(paths)
+            return [{"file": p, "cat": "Ucok", "confidence": 0.9} for p in paths]
+
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    vid = store.open_visit(conn, 1000.0); store.mark_elimination(conn, vid, 55)
+    for i in range(12):
+        store.insert_capture(conn, 1000.0 + i, vid, "cam", f"/g/f{i}.jpg")
+    lab = _CountingLabeler()
+    al = AutoLabeler(conn, lab, {}, ["Ucok"])
+    al.label_visit(vid, sample=2)
+    assert lab.seen == 2                                  # only 2 frames hit the backend
+    untouched = [c for c in store.captures_for_visit(conn, vid)
+                 if c["label"] is None and c["label_source"] is None]
+    assert len(untouched) == 10                           # 12 - 2 left for the sweep

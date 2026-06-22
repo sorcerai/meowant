@@ -5,7 +5,7 @@ from mw.elim_notify import EliminationNotifier
 class _Labeler:                       # stand-in for AutoLabeler.label_visit
     def __init__(self, conn, cat=None):
         self.conn, self.cat = conn, cat
-    def label_visit(self, vid, dry_run=False):
+    def label_visit(self, vid, dry_run=False, sample=None):
         if self.cat:
             store.set_visit_identity(self.conn, vid,
                                      store.cat_id_by_name(self.conn, self.cat), 1.0)
