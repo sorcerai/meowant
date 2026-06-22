@@ -111,23 +111,6 @@ def test_set_capture_label_syncs_visit(tmp_path):
     assert row["cat_id"] == gid
 
 
-def test_backfill_visit_cats(tmp_path):
-    conn = store.connect(str(tmp_path / "t.db"))
-    store.init_db(conn)
-    store.seed_cats(conn, ["Ucok", "Garfield", "Ella"])
-    gid = store.cat_id_by_name(conn, "Garfield")
-    eid = store.cat_id_by_name(conn, "Ella")
-    v1 = store.open_visit(conn, 1000.0)
-    store.apply_auto_label(conn, store.insert_capture(conn, 1000.0, v1, "c", "/g/a.jpg", None), gid, 0.9)
-    v2 = store.open_visit(conn, 2000.0)
-    store.apply_auto_label(conn, store.insert_capture(conn, 2000.0, v2, "c", "/g/b.jpg", None), eid, 0.9)
-    v3 = store.open_visit(conn, 3000.0)  # no labeled captures -> untouched
-    store.insert_capture(conn, 3000.0, v3, "c", "/g/c.jpg", None)
-    assert store.backfill_visit_cats(conn) == 2
-    get = lambda v: conn.execute("SELECT cat_id FROM visits WHERE id=?", (v,)).fetchone()["cat_id"]
-    assert get(v1) == gid and get(v2) == eid and get(v3) is None
-
-
 def test_seed_cats(tmp_path):
     conn = store.connect(str(tmp_path / "t.db"))
     store.init_db(conn)

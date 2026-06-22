@@ -366,16 +366,6 @@ def sync_visit_cat(conn, visit_id):
     return cat_id, conf
 
 
-def backfill_visit_cats(conn):
-    """One-time repair: re-derive visits.cat_id from captures.label for every
-    visit that has labeled frames. Idempotent. Returns the number of visits set."""
-    with _lock:
-        vids = [r["visit_id"] for r in conn.execute(
-            "SELECT DISTINCT visit_id FROM captures "
-            "WHERE label IS NOT NULL AND visit_id IS NOT NULL").fetchall()]
-    return sum(1 for vid in vids if sync_visit_cat(conn, vid) is not None)
-
-
 def unlabeled_captures(conn, limit=500):
     with _lock:
         cur = conn.execute(
