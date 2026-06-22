@@ -130,8 +130,9 @@ class ScatterDetector:
     # --- testable core ---------------------------------------------------
     def _format_alert(self, result):
         word = _SEVERITY_WORD.get(result["severity"], "")
+        ts = time.strftime("%H:%M")
         return (f"🧹 Time to sweep — {word} litter scatter on the floor "
-                f"({result['changed_pct']}% of the apron)")
+                f"({result['changed_pct']}% of the apron) [{ts}]")
 
     def score_and_record(self, visit_id, ref_path, post_paths):
         """Score the post-leave frames against the pinned reference, persist the
