@@ -5,13 +5,14 @@ import subprocess
 import urllib.parse
 import urllib.request
 
-from mw.events import BIN_FULL, CHUTE_FULL, FAULT, ELIMINATION
+from mw.events import BIN_FULL, CHUTE_FULL, FAULT
 
 _MESSAGES = {
     BIN_FULL: lambda e: "🪣 Litter bin full — time to empty it",
     CHUTE_FULL: lambda e: "⚠️ Waste chute full or blocked",
     FAULT: lambda e: f"❌ SC10 fault: {e.detail.get('bitmap')}",
-    ELIMINATION: lambda e: "🐈 A cat used the litter box",
+    # ELIMINATION is NOT here — named alerts are sent by EliminationNotifier
+    # (label-on-leave, ~30s delayed) so the cat's name resolves before the push.
 }
 
 

@@ -32,6 +32,7 @@ _MIGRATIONS = [
     ("visits", "scatter_severity", "INTEGER"),  # 0-3 litter-scatter score (meowcam3 floor delta)
     ("visits", "scatter_pct", "REAL"),          # changed-% of the apron ROI
     ("visits", "scatter_area", "INTEGER"),       # scatter blob area, px
+    ("visits", "notified", "INTEGER DEFAULT 0"), # 1 after the named elimination alert fires
 ]
 
 
@@ -474,6 +475,22 @@ def pop_empty_captures(conn):
         conn.execute("DELETE FROM captures WHERE label_source='auto-none'")
         conn.commit()
     return paths
+
+
+def pending_elimination_notifications(conn, before_iso):
+    """Eliminated, closed visits not yet alerted and old enough that their capture
+    frames have settled (leave_ts <= before_iso). Oldest-first so alerts are ordered."""
+    with _lock:
+        cur = conn.execute(
+            "SELECT * FROM visits WHERE eliminated=1 AND leave_ts IS NOT NULL "
+            "AND COALESCE(notified,0)=0 AND leave_ts <= ? ORDER BY id", (before_iso,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def mark_notified(conn, visit_id):
+    with _lock:
+        conn.execute("UPDATE visits SET notified=1 WHERE id=?", (visit_id,))
+        conn.commit()
 
 
 def eliminated_visits_missing_captures(conn, after_iso, before_iso):

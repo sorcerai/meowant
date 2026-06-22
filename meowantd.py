@@ -102,6 +102,12 @@ def main():
         print("auto-labeler: agy backend + cross-frame gate "
               f"(every {config.get(cfg, 'autolabel.interval_s', 900)}s)")
 
+        from mw.elim_notify import EliminationNotifier
+        elim_notifier = EliminationNotifier(
+            conn, autolabeler, notify=make_notify(lambda k: config.get(cfg, k)))
+        threading.Thread(target=elim_notifier.run, daemon=True).start()
+        print("elim-notifier: named 'who used the box' alerts (label-on-leave)")
+
         # Litter-scatter detector: per-visit floor delta on meowcam3 (pin a clean
         # reference at cat-enter, score post-leave frames) -> 'time to sweep' alert.
         m3 = next((c for c in cams if c["name"] == "meowcam3"), None)

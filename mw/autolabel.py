@@ -92,20 +92,27 @@ class AutoLabeler:
         return {"visit": vid, "status": d["status"], "cat": d["cat"],
                 "applied": len(d["apply"]), "cats": d["cats"], "filtered": len(empty_rows)}
 
+    def label_visit(self, vid, dry_run=False):
+        """Label ONE visit's still-untouched frames now (used by the elimination
+        notifier for label-on-leave, so the cat name resolves in seconds rather than
+        waiting for the next full sweep). Returns the summary, or None if nothing to do."""
+        if not self.valid_cats:
+            return None
+        groups = store.captures_by_visit(self.conn, [vid])
+        rows = [r for r in groups.get(vid, [])
+                if r["label"] is None and r["label_source"] is None]
+        if not rows:
+            return None
+        return self._process_visit(vid, rows, dry_run)
+
     def run_once(self, dry_run=False):
         if not self.valid_cats:
             return []   # cats not seeded yet — don't retire frames as "no cat"
-        vids = store.unlabeled_visit_ids(self.conn)
-        groups = store.captures_by_visit(self.conn, vids)
         results = []
-        for vid in vids:
-            # Only UNTOUCHED frames (no label AND no prior auto verdict): an
-            # already auto-conflict/auto-none frame must not be re-examined just
-            # because a sibling frame arrived later on the same visit.
-            rows = [r for r in groups.get(vid, [])
-                    if r["label"] is None and r["label_source"] is None]
-            if rows:
-                results.append(self._process_visit(vid, rows, dry_run))
+        for vid in store.unlabeled_visit_ids(self.conn):
+            res = self.label_visit(vid, dry_run)
+            if res is not None:
+                results.append(res)
         return results
 
     def run(self, interval=300.0):

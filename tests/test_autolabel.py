@@ -345,3 +345,23 @@ def test_discover_refs_returns_all_seeds_per_cat(tmp_path):
     (tmp_path / "ucok" / "seed-02.jpeg").write_text("x")
     refs = discover_refs(str(tmp_path), ["Ucok", "Garfield"])
     assert len(refs["Ucok"]) == 2 and "Garfield" not in refs   # no garfield dir
+
+
+# ---- label_visit (single-visit labeling for the elimination notifier) --------
+
+class _StubLabeler:
+    def __init__(self, cat): self.cat = cat
+    def predict_visit(self, paths, refs):
+        # Must include "file" so decide() can build (file, cat, conf) apply tuples.
+        return [{"file": p, "cat": self.cat, "confidence": 0.99} for p in paths]
+
+def test_label_visit_attributes_single_visit(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Garfield", "Ella"])
+    vid = store.open_visit(conn, 1000.0); store.mark_elimination(conn, vid, 55)
+    store.insert_capture(conn, 1000.0, vid, "cam", "/g/a.jpg")
+    store.insert_capture(conn, 1001.0, vid, "cam", "/g/b.jpg")
+    al = AutoLabeler(conn, _StubLabeler("Ucok"), {}, ["Ucok", "Garfield", "Ella"])
+    res = al.label_visit(vid)
+    assert res["cat"] == "Ucok"
+    assert store.cat_name_by_id(conn, store.get_visit(conn, vid)["cat_id"]) == "Ucok"

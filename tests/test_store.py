@@ -148,3 +148,25 @@ def test_pop_empty_captures(tmp_path):
 
     remaining = conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0]
     assert remaining == 2   # labeled + untouched, auto-none rows gone
+
+
+def test_pending_and_mark_notified(tmp_path):
+    import time
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    now = time.time()
+    # eliminated + closed + old enough -> pending
+    v1 = store.open_visit(conn, now - 100); store.mark_elimination(conn, v1, 55)
+    store.close_visit(conn, v1, now - 90, 10)
+    # eliminated but too recent (inside settle) -> not pending under a tight `before`
+    v2 = store.open_visit(conn, now - 5); store.mark_elimination(conn, v2, 60)
+    store.close_visit(conn, v2, now - 4, 1)
+    # not eliminated -> never pending
+    v3 = store.open_visit(conn, now - 100); store.close_visit(conn, v3, now - 95, 5)
+
+    before = store._iso(now - 30)
+    pend = store.pending_elimination_notifications(conn, before)
+    assert [p["id"] for p in pend] == [v1]      # only v1: elim, closed, settled
+
+    store.mark_notified(conn, v1)
+    assert store.pending_elimination_notifications(conn, before) == []   # v1 cleared
