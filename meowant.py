@@ -174,54 +174,14 @@ def cmd_report(cfg, logfile="cycle_log.tsv"):
     print("╚═══════════════════════════════════════════╝")
 
 
-def cmd_catreport(cfg, gap_s=30):
+def cmd_catreport(cfg):
     """Per-cat report from the DB, built on SESSIONS (IR-flicker fragments collapsed
-    via store.sessions) so the counts are real trips, not sensor-split rows."""
-    from collections import Counter
-    from datetime import date
-    from mw import store
+    via store.sessions). Shares the text builder with the Telegram /cats command."""
+    from mw import store, report
     db = os.path.join(HERE, "meowant.db")
     if not os.path.exists(db):
         sys.exit(f"No DB at {db} — start the daemon first.")
-    conn = store.connect(db)
-    sess = store.sessions(conn, gap_s=gap_s)
-    frames = store.gallery_counts(conn)            # labeled captures per cat
-    today = date.today().isoformat()
-
-    by_cat = {}
-    for s in sess:
-        by_cat.setdefault(s["cat"], []).append(s)
-
-    raw_total = conn.execute("SELECT COUNT(*) FROM visits").fetchone()[0]
-    print("╔══════════════ PER-CAT REPORT ══════════════╗")
-    print(f"  {raw_total} raw visit rows → {len(sess)} sessions "
-          f"({raw_total - len(sess)} flicker fragments collapsed)")
-    for cat in sorted(k for k in by_cat if k):      # named cats first
-        rows = by_cat[cat]
-        elim = [s for s in rows if s["eliminated"]]
-        today_e = sum(1 for s in elim if s["enter_ts"].startswith(today))
-        durs = [s["duration_s"] for s in elim if s["duration_s"]]
-        hours = Counter(s["enter_ts"][11:13] for s in elim)
-        scored = [s for s in rows if s["scatter_severity"] is not None]
-        messy = [s for s in scored if s["scatter_severity"] >= 1]
-        print(f"\n  ── {cat} ──")
-        print(f"    sessions      : {len(rows)}  (eliminations: {len(elim)}, today: {today_e})")
-        print(f"    last seen     : {rows[0]['enter_ts']}")
-        if durs:
-            print(f"    avg elim dur  : {sum(durs)//len(durs)}s")
-        if hours:
-            busy = ", ".join(f"{h}:xx ({n})" for h, n in hours.most_common(3))
-            print(f"    busiest hrs   : {busy}")
-        print(f"    gallery frames: {frames.get(cat, 0)}")
-        if scored:
-            avg = sum(s["scatter_pct"] for s in scored) / len(scored)
-            print(f"    scatter       : {len(messy)}/{len(scored)} messy, avg {avg:.2f}% of apron")
-    pending = by_cat.get(None, [])
-    if pending:
-        p_elim = sum(1 for s in pending if s["eliminated"])
-        print(f"\n  ── (unattributed: occlusion / vision pending) ──")
-        print(f"    sessions      : {len(pending)}  (eliminations: {p_elim})")
-    print("╚════════════════════════════════════════════╝")
+    print(report.cat_report(store.connect(db)))
 
 
 def cmd_clean(cfg):

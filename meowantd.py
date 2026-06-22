@@ -126,6 +126,22 @@ def main():
                          daemon=True)
     t.start()
 
+    # Inbound Telegram commands (/cats /status /health) — allowlisted to the owner
+    # chat. Only starts if Telegram creds are configured.
+    tg_token = config.get(cfg, "alerts.telegram_bot_token")
+    tg_chat = config.get(cfg, "alerts.telegram_chat_id")
+    if tg_token and tg_chat:
+        from mw.telegram_bot import TelegramBot
+        from mw import report
+        bot = TelegramBot(tg_token, tg_chat, {
+            "/cats": lambda: report.cat_report(conn),
+            "/status": lambda: report.status_report(conn, daemon.state),
+            "/health": lambda: report.health_report(conn),
+            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health",
+        })
+        threading.Thread(target=bot.run, daemon=True).start()
+        print("telegram-bot: inbound commands (/cats /status /health), owner-allowlisted")
+
     app = create_app(daemon, conn, bus=bus)
     print("meowantd → http://0.0.0.0:8765  (smart-clean idle="
           f"{sc.idle}s, enabled={sc.enabled})")
