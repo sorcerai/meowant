@@ -210,3 +210,13 @@ def test_capture_paths_around(tmp_path):
     store.insert_capture(conn, 500.0, 1, "cam", "/g/old.jpg")   # too old
     paths = store.capture_paths_around(conn, store._iso(1110.0), window_s=120)
     assert set(paths) == {"/g/a.jpg", "/g/b.jpg"}               # old.jpg excluded
+
+
+def test_human_mark_no_cat_clears_elimination(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    v = store.open_visit(conn, 1000.0); store.mark_elimination(conn, v, 55)
+    store.close_visit(conn, v, 1060.0, 60)
+    assert store.get_visit(conn, v)["eliminated"] == 1
+    store.human_mark_no_cat(conn, v)
+    row = store.get_visit(conn, v)
+    assert row["eliminated"] == 0 and row["use_record"] is None   # false trigger un-counted

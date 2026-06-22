@@ -71,7 +71,9 @@ def send_label_request(token, chat_id, vid, frame_paths, cats, when):
         except Exception as e:
             print(f"[telegram] photo {p} failed: {e}", file=sys.stderr)
     row = [{"text": c, "callback_data": f"lbl:{vid}:{c}"} for c in cats]
-    markup = {"inline_keyboard": [row, [{"text": "skip", "callback_data": f"lbl:{vid}:skip"}]]}
+    markup = {"inline_keyboard": [row, [
+        {"text": "none / not a cat", "callback_data": f"lbl:{vid}:none"},
+        {"text": "skip", "callback_data": f"lbl:{vid}:skip"}]]}
     try:
         _http_send_markup(token, chat_id,
                           f"🐈 Who used the box at {when}? (couldn't auto-ID)", markup)

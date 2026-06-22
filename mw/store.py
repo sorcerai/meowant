@@ -449,6 +449,17 @@ def human_attribute_visit(conn, visit_id, cat_id):
     return True
 
 
+def human_mark_no_cat(conn, visit_id):
+    """Human says no real cat used the box (false dp102 / the dog / nothing). Clear the
+    elimination so it stops counting as a real use — keeps daily counts and the no-go
+    alarm's 'last use' honest. The raw dp102 event stays in the immutable log."""
+    with _lock:
+        conn.execute(
+            "UPDATE visits SET eliminated=0, use_record=NULL WHERE id=?", (visit_id,))
+        conn.commit()
+    return True
+
+
 def sync_visit_cat(conn, visit_id):
     """Attribute the VISIT to a cat from the MAJORITY of its labeled captures
     (captures.label is the source of truth). Confidence = agreement ratio.

@@ -156,6 +156,9 @@ def main():
         from mw import report
         _valid_cats = [c for c in store.gallery_counts(conn).keys()]
         def _label_cb(vid, cat):
+            if cat == "none":
+                store.human_mark_no_cat(conn, vid)
+                return f"🚫 Visit {vid}: marked no cat (not counted as a real use)"
             cid = store.cat_id_by_name(conn, cat)
             if cid and store.human_attribute_visit(conn, vid, cid):
                 return f"✓ Visit {vid} labeled {cat}"
