@@ -118,3 +118,33 @@ def test_seed_cats(tmp_path):
     store.seed_cats(conn, ["Orange", "Black", "Tabby"])  # idempotent
     n = conn.execute("SELECT COUNT(*) FROM cats").fetchone()[0]
     assert n == 3
+
+
+def test_pop_empty_captures(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    vid = store.open_visit(conn, 1000.0)
+    uid = store.cat_id_by_name(conn, "Ucok")
+
+    # one labeled capture (keep), two auto-none (prune), one untouched (keep)
+    f_keep  = tmp_path / "labeled.jpg"; f_keep.write_text("x")
+    f_none1 = tmp_path / "none1.jpg";  f_none1.write_text("x")
+    f_none2 = tmp_path / "none2.jpg";  f_none2.write_text("x")
+    f_raw   = tmp_path / "raw.jpg";    f_raw.write_text("x")
+
+    c_keep = store.insert_capture(conn, 1000.0, vid, "cam", str(f_keep))
+    store.apply_auto_label(conn, c_keep, uid, 0.9)
+
+    c1 = store.insert_capture(conn, 1001.0, vid, "cam", str(f_none1))
+    store.mark_capture_examined(conn, c1, "auto-none")
+    c2 = store.insert_capture(conn, 1002.0, vid, "cam", str(f_none2))
+    store.mark_capture_examined(conn, c2, "auto-none")
+
+    store.insert_capture(conn, 1003.0, vid, "cam", str(f_raw))  # untouched
+
+    paths = store.pop_empty_captures(conn)
+    assert set(paths) == {str(f_none1), str(f_none2)}
+
+    remaining = conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0]
+    assert remaining == 2   # labeled + untouched, auto-none rows gone

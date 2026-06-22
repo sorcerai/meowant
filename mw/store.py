@@ -383,6 +383,21 @@ def gallery_counts(conn):
         return {r["name"]: r["n"] for r in cur.fetchall()}
 
 
+def pop_empty_captures(conn):
+    """Remove all auto-none capture rows (examined, no cat found) and return
+    their file paths so the caller can delete them from disk. Safe to call at
+    any time — auto-none rows are only written after the labeler has finished
+    with a frame, so there's no race with in-flight inference."""
+    with _lock:
+        rows = conn.execute(
+            "SELECT path FROM captures WHERE label_source='auto-none' AND path IS NOT NULL"
+        ).fetchall()
+        paths = [r["path"] for r in rows]
+        conn.execute("DELETE FROM captures WHERE label_source='auto-none'")
+        conn.commit()
+    return paths
+
+
 def eliminated_visits_missing_captures(conn, after_iso, before_iso):
     """Eliminated visits closed within (after_iso, before_iso] that have zero
     capture rows — capture likely failed (stale thread or dead stream). The

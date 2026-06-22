@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run the Meowant SC10 daemon: owns the device, serves the API on :8765."""
+import os
 import threading
+import time
 
 from mw import config, store
 from mw.alerts import Alerts, make_notify
@@ -11,11 +13,32 @@ from mw.smartclean import SmartClean
 from mw.api import create_app
 
 
+def _run_pruner(conn, gallery_dir, interval_s=86400, startup_delay_s=60):
+    """Delete auto-none captures (examined, no cat) from disk + DB daily."""
+    time.sleep(startup_delay_s)
+    while True:
+        paths = store.pop_empty_captures(conn)
+        deleted = 0
+        for p in paths:
+            full = os.path.join(gallery_dir, p) if not os.path.isabs(p) else p
+            try:
+                os.remove(full)
+                deleted += 1
+            except FileNotFoundError:
+                pass
+        if deleted:
+            print(f"[pruner] removed {deleted} empty captures")
+        time.sleep(interval_s)
+
+
 def main():
     cfg = config.load("config.json")
     conn = store.connect("meowant.db")
     store.init_db(conn)
     store.seed_cats(conn, ["Ucok", "Garfield", "Ella"])
+
+    threading.Thread(target=_run_pruner, args=(conn, "."),
+                     daemon=True).start()
 
     device = TuyaDevice(cfg)
     sc = SmartClean(
