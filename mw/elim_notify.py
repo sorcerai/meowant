@@ -42,7 +42,17 @@ class EliminationNotifier:
                 self.notify(self._alert_text(fresh))
             elif self.ask_who is not None:
                 paths = [c["path"] for c in store.captures_for_visit(self.conn, v["id"])]
-                self.ask_who(v["id"], paths, time.strftime("%H:%M", time.localtime(self.now())))
+                if not paths:
+                    # frameless eliminated fragment (IR-flicker) — recover the sibling
+                    # fragments' frames from the surrounding window so the prompt has photos
+                    anchor = fresh.get("leave_ts") or fresh.get("enter_ts")
+                    if anchor:
+                        paths = store.capture_paths_around(self.conn, anchor, window_s=120)
+                when = time.strftime("%H:%M", time.localtime(self.now()))
+                if paths:
+                    self.ask_who(v["id"], paths, when)
+                else:
+                    self.notify(self._alert_text(fresh))   # nothing to show — plain text
             else:
                 self.notify(self._alert_text(fresh))     # fallback: dead-end text
             store.mark_notified(self.conn, v["id"])

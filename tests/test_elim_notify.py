@@ -70,3 +70,34 @@ def test_unidentified_triggers_ask_who(tmp_path):
     assert asked == [v]                      # prompt fired
     assert sent == []                        # no dead-end text
     assert store.get_visit(conn, v)["notified"] == 1
+
+
+def test_frameless_visit_recovers_window_photos(tmp_path):
+    # eliminated visit with NO captures of its own, but sibling frames exist in the
+    # window -> ask_who fires with the recovered paths (IR-flicker recovery)
+    conn, _, _ = _setup(tmp_path, cat=None)
+    asked = {}
+    from mw.elim_notify import EliminationNotifier
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=lambda m: None,
+                            now_fn=lambda: 10_000.0, settle_s=15,
+                            ask_who=lambda vid, paths, when: asked.update(vid=vid, paths=paths))
+    # a sibling fragment dropped frames just before
+    store.insert_capture(conn, 9_880.0, 1, "cam", "/g/sib.jpg")
+    v = store.open_visit(conn, 9_900.0); store.mark_elimination(conn, v, 55)
+    store.close_visit(conn, v, 9_905.0, 5)   # v itself has zero captures
+    n.run_once()
+    assert asked.get("vid") == v and "/g/sib.jpg" in asked.get("paths", [])
+
+
+def test_frameless_with_no_window_photos_falls_back_to_text(tmp_path):
+    conn, _, sent = _setup(tmp_path, cat=None)
+    from mw.elim_notify import EliminationNotifier
+    called = []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0, settle_s=15,
+                            ask_who=lambda vid, paths, when: called.append(vid))
+    v = store.open_visit(conn, 9_900.0); store.mark_elimination(conn, v, 55)
+    store.close_visit(conn, v, 9_905.0, 5)   # no captures anywhere
+    n.run_once()
+    assert called == []                       # ask_who NOT used (no photos)
+    assert any("couldn't ID" in m for m in sent)   # plain text instead

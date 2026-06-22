@@ -487,6 +487,20 @@ def gallery_counts(conn):
         return {r["name"]: r["n"] for r in cur.fetchall()}
 
 
+def capture_paths_around(conn, before_iso, window_s=120, limit=12):
+    """Capture file paths from the window (before_iso - window_s, before_iso]. Used to
+    recover frames for an ELIMINATED visit that captured none of its own: IR-flicker
+    splits one physical visit into fragments, and the frames can land on a sibling
+    fragment while the dp102 elimination lands on a frameless one. Newest first."""
+    after = datetime.fromtimestamp(
+        datetime.fromisoformat(before_iso).timestamp() - window_s).isoformat(timespec="seconds")
+    with _lock:
+        cur = conn.execute(
+            "SELECT path FROM captures WHERE ts > ? AND ts <= ? AND path IS NOT NULL "
+            "ORDER BY id DESC LIMIT ?", (after, before_iso, limit))
+        return [r["path"] for r in cur.fetchall()]
+
+
 def pop_empty_captures(conn):
     """Remove all auto-none capture rows (examined, no cat found) and return
     their file paths so the caller can delete them from disk. Safe to call at

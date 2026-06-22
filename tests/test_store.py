@@ -200,3 +200,13 @@ def test_human_attribute_visit_no_captures(tmp_path):
     store.seed_cats(conn, ["Ella"])
     vid = store.open_visit(conn, 1000.0)
     assert store.human_attribute_visit(conn, vid, store.cat_id_by_name(conn, "Ella")) is False
+
+
+def test_capture_paths_around(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    # captures at t=1000 and t=1100; window ending 1110 with 120s back includes both
+    store.insert_capture(conn, 1000.0, 1, "cam", "/g/a.jpg")
+    store.insert_capture(conn, 1100.0, 1, "cam", "/g/b.jpg")
+    store.insert_capture(conn, 500.0, 1, "cam", "/g/old.jpg")   # too old
+    paths = store.capture_paths_around(conn, store._iso(1110.0), window_s=120)
+    assert set(paths) == {"/g/a.jpg", "/g/b.jpg"}               # old.jpg excluded
