@@ -31,7 +31,7 @@ _SEVERITY_WORD = {1: "light", 2: "moderate", 3: "heavy"}
 class ScatterDetector:
     def __init__(self, bus, conn, cam_url, out_dir, notify,
                  grabber=ffmpeg_grab, sleep=time.sleep,
-                 presence_fn=None, visit_resolver=None,
+                 presence_fn=None, visit_resolver=None, clear_fn=None,
                  threshold=1, min_duration_s=20,
                  post_leave_delay_s=8, post_frames=3, post_interval_s=2.0,
                  ref_interval_s=45, roi=None,
@@ -45,6 +45,7 @@ class ScatterDetector:
         self._sleep = sleep
         self.presence_fn = presence_fn          # () -> bool: a cat is in the box
         self.visit_resolver = visit_resolver    # () -> open visit id (or None)
+        self.clear_fn = clear_fn                # (path) -> bool: frame is animal-free
         self.threshold = threshold              # min severity that alerts
         self.min_duration_s = min_duration_s    # skip double-entry / blip visits
         self.post_leave_delay_s = post_leave_delay_s
@@ -76,11 +77,16 @@ class ScatterDetector:
             return False
         return True
 
+    def _is_clear(self, path):
+        return self.clear_fn(path) if self.clear_fn else True
+
     def _refresh_rolling_ref(self):
         if not self._idle():
             return
         try:
-            self._rolling_ref = self._grab("rolling_clean")
+            path = self._grab("rolling_clean")
+            if self._is_clear(path):     # never pin a cat/dog-contaminated reference
+                self._rolling_ref = path
         except Exception as e:
             print(f"[scatter] rolling-ref grab failed: {e}", file=sys.stderr)
 
@@ -108,10 +114,12 @@ class ScatterDetector:
         post = []
         for i in range(self.post_frames):
             if self.presence_fn is not None and self.presence_fn():
-                post = []          # a cat is back on the apron — frames would be
-                break              # contaminated; abandon scoring for this visit
+                post = []          # a cat re-entered the box — a new visit; abandon
+                break
             try:
-                post.append(self._grab(f"post_{vid}_{i}"))
+                path = self._grab(f"post_{vid}_{i}")
+                if self._is_clear(path):       # drop frames with a cat/dog/person on
+                    post.append(path)          # the floor — an animal body isn't litter
             except Exception as e:
                 print(f"[scatter] post-leave grab failed: {e}", file=sys.stderr)
             if i < self.post_frames - 1:

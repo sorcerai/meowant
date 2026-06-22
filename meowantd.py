@@ -68,9 +68,10 @@ def main():
         from mw.autolabel import AutoLabeler, discover_refs
         from mw.labeler import AgyLabeler
         from mw.catfilter import TorchvisionCatFilter
+        catfilter = TorchvisionCatFilter()  # shared: cat/no-cat for labels + floor-clear for scatter
         _cats = list(store.gallery_counts(conn).keys())
         autolabeler = AutoLabeler(conn, AgyLabeler(), discover_refs("gallery", _cats), _cats,
-                                  catfilter=TorchvisionCatFilter())  # drop empties before agy
+                                  catfilter=catfilter)  # drop empties before agy
         threading.Thread(
             target=autolabeler.run,
             kwargs={"interval": config.get(cfg, "autolabel.interval_s", 900)},
@@ -88,9 +89,10 @@ def main():
                 notify=make_notify(lambda k: config.get(cfg, k)),
                 presence_fn=lambda: daemon.state.get("24") == "cat_get_in",
                 visit_resolver=lambda: store.latest_open_visit_id(conn),
+                clear_fn=catfilter.is_clear,   # reject frames with a cat/dog/person on the floor
                 threshold=config.get(cfg, "scatter.severity_threshold", 1),
                 min_duration_s=config.get(cfg, "scatter.min_duration_s", 20),
-                post_leave_delay_s=config.get(cfg, "scatter.post_leave_delay_s", 8))
+                post_leave_delay_s=config.get(cfg, "scatter.post_leave_delay_s", 12))
             threading.Thread(target=scat.run, daemon=True).start()
             print("scatter-detector: meowcam3 floor delta + 'time to sweep' alert")
 

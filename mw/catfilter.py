@@ -12,9 +12,14 @@ import sys
 
 
 class CatFilter:
-    """Interface: True if a cat appears to be present in the frame."""
+    """Interface: cat presence (has_cat) + floor-clear check (is_clear)."""
 
     def has_cat(self, image_path):
+        raise NotImplementedError
+
+    def is_clear(self, image_path):
+        """True if NO person/cat/dog is in the frame — a floor frame safe to
+        score for litter scatter."""
         raise NotImplementedError
 
 
@@ -24,9 +29,17 @@ class NullCatFilter(CatFilter):
     def has_cat(self, image_path):
         return True
 
+    def is_clear(self, image_path):
+        return True
 
-# COCO class index for "cat" in torchvision detection models (91-class indexing).
+
+# COCO class indices (torchvision 91-class indexing). A floor frame is only safe
+# to score for scatter if NONE of these living things appear in it — an animal
+# body reads as a huge false-positive 'scatter' in the reference diff.
+_COCO_PERSON = 1
 _COCO_CAT = 17
+_COCO_DOG = 18
+_COCO_LIVING = {_COCO_PERSON, _COCO_CAT, _COCO_DOG}
 
 
 class TorchvisionCatFilter(CatFilter):
@@ -35,8 +48,9 @@ class TorchvisionCatFilter(CatFilter):
     runs on MPS if available, else CPU (the model is small, fine on CPU for the
     occasional frame)."""
 
-    def __init__(self, score_thresh=0.4):
-        self.score_thresh = score_thresh
+    def __init__(self, score_thresh=0.4, clear_thresh=0.3):
+        self.score_thresh = score_thresh   # cat detection: favor recall
+        self.clear_thresh = clear_thresh   # animal rejection: lower = more cautious
         self._model = None
         self._device = None
         self._preprocess = None
@@ -53,21 +67,32 @@ class TorchvisionCatFilter(CatFilter):
                        .ssdlite320_mobilenet_v3_large(weights=weights)
                        .eval().to(self._device))
 
+    def _labels_above(self, image_path, thresh):
+        import torch
+        from PIL import Image
+        self._ensure_model()
+        img = Image.open(image_path).convert("RGB")
+        x = self._preprocess(img).to(self._device)
+        with torch.no_grad():
+            out = self._model([x])[0]
+        return {label for label, score in zip(out["labels"].tolist(), out["scores"].tolist())
+                if score >= thresh}
+
     def has_cat(self, image_path):
         try:
-            import torch
-            from PIL import Image
-            self._ensure_model()
-            img = Image.open(image_path).convert("RGB")
-            x = self._preprocess(img).to(self._device)
-            with torch.no_grad():
-                out = self._model([x])[0]
-            for label, score in zip(out["labels"].tolist(), out["scores"].tolist()):
-                if label == _COCO_CAT and score >= self.score_thresh:
-                    return True
-            return False
+            return _COCO_CAT in self._labels_above(image_path, self.score_thresh)
         except Exception as e:
-            # On any failure, fail OPEN (assume a cat) so we never silently drop
-            # a real visit — the agy stage will sort it out.
+            # Fail OPEN (assume a cat) so we never silently drop a real visit —
+            # the agy stage will sort it out.
             print(f"[catfilter] {image_path} failed ({e}); passing through", file=sys.stderr)
             return True
+
+    def is_clear(self, image_path):
+        """True only if NO person/cat/dog appears above clear_thresh. Fails CLOSED
+        (returns False) so a frame we can't verify is never scored as scatter — an
+        animal body would otherwise read as a massive false positive."""
+        try:
+            return _COCO_LIVING.isdisjoint(self._labels_above(image_path, self.clear_thresh))
+        except Exception as e:
+            print(f"[catfilter] is_clear {image_path} failed ({e}); skipping", file=sys.stderr)
+            return False

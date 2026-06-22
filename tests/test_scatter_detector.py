@@ -146,6 +146,31 @@ def test_cat_returns_midgrab_discards(tmp_path):
     assert store.get_visit(conn, vid)["scatter_severity"] is None
 
 
+def test_contaminated_post_frames_skipped(tmp_path):
+    conn = _db()
+    # clear_fn rejects every frame (a cat/dog/person on the floor) -> no score
+    det, notes = _detector(conn, str(tmp_path), min_duration_s=20,
+                           presence_fn=lambda: False, visit_resolver=lambda: None,
+                           clear_fn=lambda p: False)
+    det._rolling_ref = _write(str(tmp_path / "rolling_clean.jpg"))
+    vid = store.open_visit(conn, 1000.0)
+    det._open_vid = vid
+    det._visit_ref[vid] = det._rolling_ref
+    store.close_visit(conn, vid, 1030.0, 30)
+    det._on_leave()
+    assert notes == []
+    assert store.get_visit(conn, vid)["scatter_severity"] is None
+
+
+def test_rolling_ref_requires_clear(tmp_path):
+    conn = _db()
+    # idle, but the grabbed frame has an animal -> reference must NOT be pinned
+    det, _ = _detector(conn, str(tmp_path), presence_fn=lambda: False,
+                       visit_resolver=lambda: None, clear_fn=lambda p: False)
+    det._refresh_rolling_ref()
+    assert det._rolling_ref is None
+
+
 # --- real calibration pair (gated on local frames) ------------------------
 _REFS = os.path.expanduser("~/repos/meowant/gallery/refs")
 _CLEAN = os.path.join(_REFS, "meowcam3_pair_clean.jpg")
