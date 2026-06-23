@@ -3,7 +3,6 @@ cats stop being monitored. Run once-and-exit by its own launchd job so it can't
 wedge; reads meowant.db directly (no dependency on the meowant daemon) and probes
 :8765/state for liveness. Fails LOUD — an exception still fires an alert."""
 import json
-import os
 import sys
 import time
 from datetime import datetime
@@ -76,6 +75,7 @@ class DeadManSwitch:
         return None
 
     def check_per_cat(self):
+        """Returns (cat, msg) pairs so each cat latches under its own key in run_once."""
         if not self.per_cat_enabled:
             return []
         now = self.now()
@@ -94,8 +94,8 @@ class DeadManSwitch:
             # only flag if the SYSTEM is clearly working (someone went recently) but
             # THIS cat is silent — avoids firing during a global quiet/outage period.
             if hours >= self.per_cat_hours and (now - most_recent_any) / 3600.0 < self.per_cat_hours:
-                out.append(f"🚨 DEAD-MAN: {cat} hasn't used the box in {hours:.0f}h "
-                           f"(others have) — check on {cat}")
+                out.append((cat, f"🚨 DEAD-MAN: {cat} hasn't used the box in {hours:.0f}h "
+                                 f"(others have) — check on {cat}"))
         return out
 
     def _load_state(self):
@@ -125,17 +125,20 @@ class DeadManSwitch:
     def run_once(self):
         state = self._load_state()
         fired = 0
-        # each check is independently fail-loud: a crash in one still alarms + continues
-        for key, fn in (("no_go", lambda: [self.check_no_go()]),
-                        ("liveness", lambda: [self.check_liveness()]),
-                        ("per_cat", self.check_per_cat)):
+        # Each check yields (suffix, msg) pairs; suffix=None for whole-system checks
+        # (latch key stays the base), or a discriminator (the cat name) so per-cat
+        # alerts latch independently — otherwise a 2nd silent cat never alerts.
+        for base, fn in (("no_go", lambda: [(None, self.check_no_go())]),
+                         ("liveness", lambda: [(None, self.check_liveness())]),
+                         ("per_cat", self.check_per_cat)):
             try:
-                for msg in fn():
+                for suffix, msg in fn():
                     if msg:
-                        fired += self._fire(f"{key}", msg, state)
+                        key = base if suffix is None else f"{base}:{suffix}"
+                        fired += self._fire(key, msg, state)
             except Exception as e:
-                fired += self._fire(f"{key}_error",
-                                    f"🚨 DEAD-MAN: '{key}' check ERRORED ({e}) — "
+                fired += self._fire(f"{base}_error",
+                                    f"🚨 DEAD-MAN: '{base}' check ERRORED ({e}) — "
                                     f"investigate, monitoring integrity unknown", state)
         self._save_state(state)
         return fired

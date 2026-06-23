@@ -91,8 +91,25 @@ def test_per_cat_fires_for_silent_cat(tmp_path):
     _elim(conn, base - 30 * 3600, cat="Ella")          # Ella 30h ago
     _elim(conn, base - 1 * 3600, cat="Ucok")           # Ucok 1h ago (system clearly working)
     msgs = _sw(conn, base, per_cat_enabled=True, per_cat_hours=24).check_per_cat()
-    assert any("Ella" in m for m in msgs)
-    assert not any("Ucok" in m for m in msgs)
+    assert any(c == "Ella" for c, m in msgs)
+    assert not any(c == "Ucok" for c, m in msgs)
+
+
+def test_run_once_fires_both_silent_cats(tmp_path):
+    conn = _db(tmp_path)
+    base = time.mktime(time.strptime("2026-06-22 14:00", "%Y-%m-%d %H:%M"))
+    _elim(conn, base - 30 * 3600, cat="Ella")          # Ella silent 30h
+    _elim(conn, base - 28 * 3600, cat="Garfield")      # Garfield silent 28h
+    _elim(conn, base - 1 * 3600, cat="Ucok")           # Ucok 1h ago (system working)
+    sent = []
+    sw = DeadManSwitch(conn, notify=sent.append, now_fn=lambda: base,
+                       per_cat_enabled=True, per_cat_hours=24, no_go_hours=12,
+                       state_path=str(tmp_path / "st.json"),
+                       state_probe=lambda: {"last_ok_ts": base - 5})  # daemon healthy
+    assert sw.run_once() == 2                           # BOTH silent cats latch independently
+    assert any("Ella" in m for m in sent)
+    assert any("Garfield" in m for m in sent)
+    assert not any("Ucok" in m for m in sent)
 
 
 def test_run_once_fires_and_latches(tmp_path):
