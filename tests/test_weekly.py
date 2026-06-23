@@ -59,3 +59,14 @@ def test_collect_facts_attribution_and_flicker():
     assert s["total_visits"] == 2 and s["attributed"] == 1 and s["unattributed"] == 1
     assert abs(s["attribution_pct"] - 50.0) < 0.01
     assert s["flicker_fragments"] == 1
+
+
+def test_collect_facts_window_boundaries():
+    """A void ~1h before now is in-window; one ~8d before now is not."""
+    conn = _conn()
+    now = datetime(2026, 6, 23, 12, 0, 0).timestamp()
+    h = 3600.0
+    _add_void(conn, "Ucok", now - 1 * h, 55, 50)       # in this week
+    _add_void(conn, "Ucok", now - 8 * 24 * h, 60, 55)  # 8 days ago -> excluded
+    facts = weekly.collect_facts(conn, now)
+    assert facts["per_cat"]["Ucok"]["voids"] == 1

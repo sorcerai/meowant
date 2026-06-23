@@ -37,15 +37,16 @@ def _void_rows(conn, cat, start_epoch, end_epoch):
     Garfield filtered to weight-present, duration>floor (drops timer-reset pokes)."""
     extra = ""
     if cat == "Garfield":
-        extra = f" AND use_record IS NOT NULL AND duration_s > {POKE_DUR_FLOOR_S}"
+        extra = f" AND duration_s > {POKE_DUR_FLOOR_S}"
     sql = (
         "SELECT CAST(strftime('%s', enter_ts) AS INT) AS s, duration_s, use_record "
         "FROM visits WHERE cat_id=(SELECT id FROM cats WHERE name=?) "
         "AND eliminated=1 AND use_record IS NOT NULL "
-        "AND CAST(strftime('%s', enter_ts) AS INT) >= ? "
-        "AND CAST(strftime('%s', enter_ts) AS INT) < ?" + extra)
+        "AND strftime('%s', enter_ts) >= strftime('%s', ?) "
+        "AND strftime('%s', enter_ts) < strftime('%s', ?)" + extra)
     with store._lock:
-        rows = conn.execute(sql, (cat, int(start_epoch), int(end_epoch))).fetchall()
+        rows = conn.execute(
+            sql, (cat, store._iso(start_epoch), store._iso(end_epoch))).fetchall()
     return [(r["s"], r["duration_s"], r["use_record"]) for r in rows]
 
 
@@ -82,10 +83,11 @@ def _attribution_pct(conn, start_epoch, end_epoch):
     sql = ("SELECT "
            "SUM(CASE WHEN cat_id IS NOT NULL THEN 1 ELSE 0 END) AS attr, "
            "COUNT(*) AS total "
-           "FROM visits WHERE CAST(strftime('%s', enter_ts) AS INT) >= ? "
-           "AND CAST(strftime('%s', enter_ts) AS INT) < ?")
+           "FROM visits WHERE strftime('%s', enter_ts) >= strftime('%s', ?) "
+           "AND strftime('%s', enter_ts) < strftime('%s', ?)")
     with store._lock:
-        r = conn.execute(sql, (int(start_epoch), int(end_epoch))).fetchone()
+        r = conn.execute(
+            sql, (store._iso(start_epoch), store._iso(end_epoch))).fetchone()
     attr = r["attr"] or 0
     total = r["total"] or 0
     pct = round(attr / total * 100, 2) if total else 0.0
@@ -118,9 +120,9 @@ def collect_facts(conn, now, *, cats=CATS):
         flicker = conn.execute(
             "SELECT COUNT(*) AS n FROM visits WHERE cat_id IS NULL "
             "AND duration_s <= 10 AND use_record IS NULL "
-            "AND CAST(strftime('%s', enter_ts) AS INT) >= ? "
-            "AND CAST(strftime('%s', enter_ts) AS INT) < ?",
-            (int(start), int(end))).fetchone()["n"]
+            "AND strftime('%s', enter_ts) >= strftime('%s', ?) "
+            "AND strftime('%s', enter_ts) < strftime('%s', ?)",
+            (store._iso(start), store._iso(end))).fetchone()["n"]
     return {
         "period": {"start": store._iso(start), "end": store._iso(end), "days": 7},
         "per_cat": per_cat,
