@@ -97,3 +97,45 @@ class DeadManSwitch:
                 out.append(f"🚨 DEAD-MAN: {cat} hasn't used the box in {hours:.0f}h "
                            f"(others have) — check on {cat}")
         return out
+
+    def _load_state(self):
+        try:
+            with open(self.state_path) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_state(self, state):
+        try:
+            with open(self.state_path, "w") as f:
+                json.dump(state, f)
+        except Exception as e:
+            print(f"[deadman] state save failed: {e}", file=sys.stderr)
+
+    def _fire(self, key, msg, state):
+        last = state.get(key)
+        if last is not None:
+            age_h = (self.now() - datetime.fromisoformat(last).timestamp()) / 3600.0
+            if age_h < self.realarm_hours:
+                return 0                              # latched — re-fire later
+        self.notify(msg)
+        state[key] = datetime.fromtimestamp(self.now()).isoformat(timespec="seconds")
+        return 1
+
+    def run_once(self):
+        state = self._load_state()
+        fired = 0
+        # each check is independently fail-loud: a crash in one still alarms + continues
+        for key, fn in (("no_go", lambda: [self.check_no_go()]),
+                        ("liveness", lambda: [self.check_liveness()]),
+                        ("per_cat", self.check_per_cat)):
+            try:
+                for msg in fn():
+                    if msg:
+                        fired += self._fire(f"{key}", msg, state)
+            except Exception as e:
+                fired += self._fire(f"{key}_error",
+                                    f"🚨 DEAD-MAN: '{key}' check ERRORED ({e}) — "
+                                    f"investigate, monitoring integrity unknown", state)
+        self._save_state(state)
+        return fired
