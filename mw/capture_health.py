@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 
+from mw import remediation
 from mw import store
 
 
@@ -36,7 +37,7 @@ def ffmpeg_probe(rtsp_url, timeout=10):
 class CaptureHealth:
     def __init__(self, conn, cameras, notify, probe=ffmpeg_probe,
                  now_fn=time.time, settle_seconds=120, max_age_seconds=3600,
-                 labeler_settle_seconds=1800):
+                 labeler_settle_seconds=1800, remediator=None):
         self.conn = conn
         self.cameras = cameras
         self.notify = notify
@@ -48,6 +49,7 @@ class CaptureHealth:
         self._up = {}                        # cam name -> last known up/down
         self._alerted = set()                # visit ids already alerted (per process)
         self._labeler_alerted = False        # latch so we alert once per stall episode
+        self.remediator = remediator         # None -> notify-only (legacy/camera-absent)
 
     def check_streams(self):
         for cam in self.cameras:
@@ -78,8 +80,13 @@ class CaptureHealth:
         stuck = store.stale_unlabeled_count(self.conn, cutoff)
         if stuck > 0 and not self._labeler_alerted:
             mins = int(self.labeler_settle / 60)
-            self.notify(f"🏷️ Auto-labeler stalled: {stuck} frame(s) unprocessed "
-                        f">{mins}min — labeler may be down")
+            if self.remediator:
+                self.remediator.handle(
+                    "labeler_stall", {"stuck": stuck, "grace_min": mins},
+                    lambda: remediation.labeler_stall_playbook(stuck))
+            else:
+                self.notify(f"🏷️ Auto-labeler stalled: {stuck} frame(s) unprocessed "
+                            f">{mins}min — labeler may be down")
             self._labeler_alerted = True
         elif stuck == 0:
             self._labeler_alerted = False     # backlog cleared — re-arm

@@ -132,3 +132,21 @@ def test_no_cameras_no_probing(tmp_path):
                       probe=lambda url: probed.append(url) or True, now_fn=lambda: T)
     h.run_once()
     assert probed == []   # camera-absent install: capture-health is a no-op
+
+
+def test_labeler_stall_routes_through_remediator_when_present(tmp_path):
+    from mw.remediation import Remediator
+    conn = _db(tmp_path)
+    vid = store.open_visit(conn, T - 5000)
+    store.insert_capture(conn, T - 5000, vid, "c", "/g/x.jpg")   # old, untouched
+    msgs = []
+    rem = Remediator(conn, notify=msgs.append, now_fn=lambda: T)
+    h = CaptureHealth(conn, [{"name": "c", "url": "u"}], notify=lambda m: None,
+                      probe=lambda u: True, now_fn=lambda: T,
+                      labeler_settle_seconds=1800, remediator=rem)
+    h.check_labeler()
+    assert len(msgs) == 1 and "stall" in msgs[0].lower()
+    # the episode was recorded as an incident (not just an ephemeral notify)
+    rows = store.recent_incidents(conn)
+    assert rows and rows[0]["kind"] == "labeler_stall"
+    assert rows[0]["outcome"] == "escalated"

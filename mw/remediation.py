@@ -26,6 +26,30 @@ import time
 from mw import store
 
 
+def labeler_stall_playbook(stuck_count, which=shutil.which):
+    """Diagnose a labeler stall and escalate with the root cause. NEVER restarts:
+    the labeler is a thread inside meowantd, restart churn caused the 2026-06-22
+    stall, and a restart can't verify itself. `which` is injectable for tests."""
+    agy = which("agy")
+    if agy is None:
+        return {
+            "action": "checked `agy` on PATH: MISSING",
+            "resolved": False,
+            "escalate": (f"🏷️ Auto-labeler stalled — {stuck_count} frame(s) "
+                         f"unprocessed AND `agy` is not on the daemon PATH. "
+                         f"Labeling is DOWN until the binary is restored "
+                         f"(a daemon restart will NOT fix this)."),
+        }
+    return {
+        "action": f"checked `agy` on PATH: present ({agy})",
+        "resolved": False,
+        "escalate": (f"🏷️ Auto-labeler stalled — {stuck_count} frame(s) unprocessed; "
+                     f"`agy` IS on PATH so it's likely a transient wedge. Not "
+                     f"auto-restarting (restart churn caused the 2026-06-22 stall) "
+                     f"— investigate if it persists."),
+    }
+
+
 class Remediator:
     def __init__(self, conn, notify, now_fn=time.time,
                  max_per_window=3, window_s=3600):

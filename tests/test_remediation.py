@@ -1,6 +1,7 @@
 """Remediator core: rate-limit -> run playbook -> log incident -> escalate."""
 from mw import store
 from mw.remediation import Remediator
+from mw.remediation import labeler_stall_playbook
 
 T = 1_000_000.0
 
@@ -77,3 +78,19 @@ def test_rate_limit_window_expires(tmp_path):
     outcome = r.handle("stream_down", {}, _escalating_playbook)
     assert outcome == "escalated"                       # window cleared -> alerts again
     assert len(msgs) == 2
+
+
+def test_labeler_playbook_agy_missing_says_restart_wont_help():
+    res = labeler_stall_playbook(7, which=lambda name: None)
+    assert res["resolved"] is False
+    assert "not on the daemon PATH" in res["escalate"]
+    assert "MISSING" in res["action"]
+
+
+def test_labeler_playbook_agy_present_warns_against_restart():
+    res = labeler_stall_playbook(3, which=lambda name: "/usr/local/bin/agy")
+    assert res["resolved"] is False
+    assert "7" not in res["escalate"]                  # uses the real count
+    assert "3 frame" in res["escalate"]
+    assert "restart" in res["escalate"].lower()        # explicitly NOT restarting
+    assert "/usr/local/bin/agy" in res["action"]
