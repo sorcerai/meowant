@@ -70,3 +70,63 @@ def test_collect_facts_window_boundaries():
     _add_void(conn, "Ucok", now - 8 * 24 * h, 60, 55)  # 8 days ago -> excluded
     facts = weekly.collect_facts(conn, now)
     assert facts["per_cat"]["Ucok"]["voids"] == 1
+
+
+def _facts(per_cat, system=None):
+    base_sys = {"total_visits": 0, "attributed": 0, "unattributed": 0,
+                "attribution_pct": 100.0, "prev_attribution_pct": None,
+                "flicker_fragments": 0}
+    if system:
+        base_sys.update(system)
+    return {"period": {"start": "x", "end": "y", "days": 7},
+            "per_cat": per_cat, "system": base_sys}
+
+
+def _cat(voids, gap_mean, gap_se, gap_n, prev_gap_mean=None, prev_gap_se=0.0,
+         prev_gap_n=0, weight_mean=None, weight_se=0.0, weight_n=0,
+         prev_weight_mean=None, prev_weight_se=0.0, prev_weight_n=0):
+    return {"voids": voids, "per_day": round(voids / 7.0, 2),
+            "gap_h": {"mean": gap_mean, "min": None, "max": None, "se": gap_se, "n": gap_n},
+            "weight": {"mean": weight_mean, "se": weight_se, "n": weight_n},
+            "circadian": {"night": 0, "morn": 0, "aft": 0, "eve": 0},
+            "prev": {"voids": 0, "gap_mean_h": prev_gap_mean, "gap_se": prev_gap_se,
+                     "gap_n": prev_gap_n, "weight_mean": prev_weight_mean,
+                     "weight_se": prev_weight_se, "weight_n": prev_weight_n}}
+
+
+def test_assess_insufficient_data():
+    f = _facts({"Ucok": _cat(voids=3, gap_mean=3.0, gap_se=0.1, gap_n=2)})
+    out = [x for x in weekly.assess(f) if x["cat"] == "Ucok"]
+    assert out == [{"cat": "Ucok", "metric": "frequency",
+                    "severity": "insufficient_data", "value": 3,
+                    "margin": None, "delta": None,
+                    "evidence": "N=3 voids this week — too few to judge drift"}]
+
+
+def test_assess_nominal_within_noise():
+    f = _facts({"Ucok": _cat(voids=20, gap_mean=3.2, gap_se=0.2, gap_n=19,
+                             prev_gap_mean=3.0, prev_gap_se=0.2, prev_gap_n=18)})
+    freq = [x for x in weekly.assess(f) if x["cat"] == "Ucok" and x["metric"] == "frequency"][0]
+    assert freq["severity"] == "nominal"   # 0.2 delta < 2*sqrt(.2^2+.2^2)=0.566
+
+
+def test_assess_watch_on_significant_delta():
+    f = _facts({"Ucok": _cat(voids=20, gap_mean=6.0, gap_se=0.2, gap_n=19,
+                             prev_gap_mean=3.0, prev_gap_se=0.2, prev_gap_n=18)})
+    freq = [x for x in weekly.assess(f) if x["cat"] == "Ucok" and x["metric"] == "frequency"][0]
+    assert freq["severity"] == "watch" and freq["delta"] == 3.0
+
+
+def test_assess_drift_on_persistence():
+    f = _facts({"Ucok": _cat(voids=20, gap_mean=6.0, gap_se=0.2, gap_n=19,
+                             prev_gap_mean=3.0, prev_gap_se=0.2, prev_gap_n=18)})
+    prev = [{"cat": "Ucok", "metric": "frequency", "severity": "watch", "delta": 2.5}]
+    freq = [x for x in weekly.assess(f, prev_findings=prev)
+            if x["cat"] == "Ucok" and x["metric"] == "frequency"][0]
+    assert freq["severity"] == "drift"   # same cat+metric+sign, was watch -> escalates
+
+
+def test_assess_attribution_drop():
+    f = _facts({}, system={"attribution_pct": 40.0, "prev_attribution_pct": 70.0})
+    attr = [x for x in weekly.assess(f) if x["metric"] == "attribution"][0]
+    assert attr["severity"] == "watch" and attr["delta"] == -30.0

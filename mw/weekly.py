@@ -131,3 +131,70 @@ def collect_facts(conn, now, *, cats=CATS):
                    "prev_attribution_pct": prev_pct if prev_total else None,
                    "flicker_fragments": flicker},
     }
+
+
+def _significant(delta, se_a, se_b, sigma_k):
+    combined = math.sqrt((se_a or 0.0) ** 2 + (se_b or 0.0) ** 2)
+    margin = round(sigma_k * combined, 3)
+    return abs(delta) > margin, margin
+
+
+def _persists(prev_findings, cat, metric, delta):
+    for p in prev_findings or ():
+        if (p.get("cat") == cat and p.get("metric") == metric
+                and p.get("severity") in ("watch", "drift")
+                and (p.get("delta") or 0.0) * delta > 0):   # same direction
+            return True
+    return False
+
+
+def _drift_finding(cat, metric, cur_mean, cur_se, cur_n, prev_mean, prev_se,
+                   prev_n, prev_findings, sigma_k, unit):
+    if cur_mean is None or prev_mean is None or cur_n < 2 or prev_n < 2:
+        return {"cat": cat, "metric": metric, "severity": "nominal",
+                "value": cur_mean, "margin": None, "delta": None,
+                "evidence": f"{metric}: establishing baseline"}
+    delta = round(cur_mean - prev_mean, 3)
+    sig, margin = _significant(delta, cur_se, prev_se, sigma_k)
+    if not sig:
+        return {"cat": cat, "metric": metric, "severity": "nominal",
+                "value": cur_mean, "margin": margin, "delta": delta,
+                "evidence": f"{metric} Δ {delta:+}{unit} within noise (±{margin})"}
+    severity = "drift" if _persists(prev_findings, cat, metric, delta) else "watch"
+    arrow = "up" if delta > 0 else "down"
+    return {"cat": cat, "metric": metric, "severity": severity,
+            "value": cur_mean, "margin": margin, "delta": delta,
+            "evidence": f"{metric} {arrow} {delta:+}{unit} vs last week (>±{margin})"}
+
+
+def assess(facts, prev_findings=(), *, min_void_n=5, sigma_k=2.0,
+           attribution_drop_pp=15.0):
+    findings = []
+    for cat, c in facts["per_cat"].items():
+        if c["voids"] < min_void_n:
+            findings.append({"cat": cat, "metric": "frequency",
+                             "severity": "insufficient_data", "value": c["voids"],
+                             "margin": None, "delta": None,
+                             "evidence": f"N={c['voids']} voids this week — too few to judge drift"})
+            continue
+        g, p = c["gap_h"], c["prev"]
+        findings.append(_drift_finding(
+            cat, "frequency", g["mean"], g["se"], g["n"],
+            p["gap_mean_h"], p["gap_se"], p["gap_n"], prev_findings, sigma_k, "h"))
+        w = c["weight"]
+        findings.append(_drift_finding(
+            cat, "weight", w["mean"], w["se"], w["n"],
+            p["weight_mean"], p["weight_se"], p["weight_n"], prev_findings, sigma_k, "g"))
+    s = facts["system"]
+    prev_pct = s.get("prev_attribution_pct")
+    if prev_pct is not None and (prev_pct - s["attribution_pct"]) >= attribution_drop_pp:
+        delta = round(s["attribution_pct"] - prev_pct, 2)
+        findings.append({"cat": None, "metric": "attribution", "severity": "watch",
+                         "value": s["attribution_pct"], "margin": None, "delta": delta,
+                         "evidence": f"attribution fell {delta}pp — a cat may be going "
+                                     f"unidentified (sick cats move differently)"})
+    else:
+        findings.append({"cat": None, "metric": "attribution", "severity": "nominal",
+                         "value": s["attribution_pct"], "margin": None, "delta": None,
+                         "evidence": f"attribution {s['attribution_pct']}%"})
+    return findings
