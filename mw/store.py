@@ -255,6 +255,20 @@ def eliminations_today(conn, day=None):
         return row[0]
 
 
+def elimination_attribution_stats(conn, after_iso, before_iso):
+    """For eliminated visits with after_iso <= enter_ts < before_iso, return
+    (raw, attributed): raw = all eliminated=1; attributed = those carrying a
+    cat_id. `before_iso` should be earlier than now by the labeler's grace window
+    so visits too recent to have been labeled are not counted as 'dropped'."""
+    with _lock:
+        row = conn.execute(
+            "SELECT COUNT(*) AS raw, "
+            "  SUM(CASE WHEN cat_id IS NOT NULL THEN 1 ELSE 0 END) AS attributed "
+            "FROM visits WHERE eliminated=1 AND enter_ts>=? AND enter_ts<?",
+            (after_iso, before_iso)).fetchone()
+        return row["raw"], (row["attributed"] or 0)
+
+
 def seed_cats(conn, names):
     with _lock:
         for n in names:

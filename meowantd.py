@@ -116,6 +116,20 @@ def main():
         threading.Thread(target=elim_notifier.run, daemon=True).start()
         print("elim-notifier: named 'who used the box' alerts (label-on-leave)")
 
+        # Invariant canary (self-heal C5): cross-check raw eliminations vs
+        # attributed ones; fire if the labeler is silently dropping health events.
+        if config.get(cfg, "canary.enabled", True):
+            from mw.invariant_canary import InvariantCanary
+            canary = InvariantCanary(
+                conn, make_notify(lambda k: config.get(cfg, k)),
+                window_hours=config.get(cfg, "canary.window_hours", 48),
+                grace_hours=config.get(cfg, "canary.grace_hours", 2),
+                min_sample=config.get(cfg, "canary.min_sample", 4),
+                min_ratio=config.get(cfg, "canary.min_ratio", 0.5),
+                interval=config.get(cfg, "canary.interval_s", 3600))
+            threading.Thread(target=canary.run, daemon=True).start()
+            print("invariant-canary: raw-vs-attributed elimination check")
+
         # Litter-scatter detector: per-visit floor delta on meowcam3 (pin a clean
         # reference at cat-enter, score post-leave frames) -> 'time to sweep' alert.
         from mw.scatter_detector import ScatterDetector

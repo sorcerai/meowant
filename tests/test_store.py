@@ -230,3 +230,47 @@ def test_set_visit_scatter_keeps_worst(tmp_path):
     assert store.get_visit(conn, v)["scatter_severity"] == 3
     store.set_visit_scatter(conn, v, 1, 0.5, 20)        # a later lighter score must NOT clobber
     assert store.get_visit(conn, v)["scatter_severity"] == 3
+
+
+def test_elimination_attribution_stats_counts_raw_and_attributed(tmp_path):
+    from mw import store
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    cid = store.cat_id_by_name(conn, "Ucok")
+    T = 1_000_000.0
+
+    def _elim(enter, attributed):
+        vid = store.open_visit(conn, enter)            # enter_ts = _iso(enter)
+        store.mark_elimination(conn, vid, 50)
+        if attributed:
+            store.set_visit_identity(conn, vid, cid, 0.9)
+        return vid
+
+    _elim(T - 100, True)      # in window, attributed
+    _elim(T - 90, True)       # in window, attributed
+    _elim(T - 80, False)      # in window, NOT attributed
+    # a non-eliminated visit with a cat_id must NOT count as a raw elimination
+    nv = store.open_visit(conn, T - 70)
+    store.set_visit_identity(conn, nv, cid, 0.9)
+
+    after = store._iso(T - 1000)
+    before = store._iso(T)
+    raw, attributed = store.elimination_attribution_stats(conn, after, before)
+    assert raw == 3
+    assert attributed == 2
+
+
+def test_elimination_attribution_stats_respects_window_bounds(tmp_path):
+    from mw import store
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    T = 1_000_000.0
+    for off in (-5000, -100, -10):    # one too old, one in-window, one too recent
+        vid = store.open_visit(conn, T + off)
+        store.mark_elimination(conn, vid, 50)
+    after = store._iso(T - 1000)      # excludes the -5000 one
+    before = store._iso(T - 50)       # excludes the -10 one
+    raw, attributed = store.elimination_attribution_stats(conn, after, before)
+    assert raw == 1
+    assert attributed == 0

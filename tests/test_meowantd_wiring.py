@@ -13,6 +13,14 @@ def test_remediator_is_wired_into_capture_health():
     assert "/incidents" in src                          # command registered
 
 
+def test_invariant_canary_is_wired():
+    import inspect
+    import meowantd
+    src = inspect.getsource(meowantd)
+    assert "InvariantCanary(" in src           # canary constructed
+    assert "canary.enabled" in src             # config-gated
+
+
 def test_on_capture_writes_row_for_open_visit(tmp_path):
     conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
     vid = store.open_visit(conn, 1000.0)
