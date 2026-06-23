@@ -22,25 +22,36 @@ The cloud API exposes codes; **local enumeration revealed more dps than the clou
 `functions` list**, including a food-level sensor. Local raw dp numbers (from a LAN
 `status()` read) cross-referenced to cloud codes:
 
-| code | local dp | type | meaning |
-|------|----------|------|---------|
-| `feed_state` | `4` | Enum standby/feeding | current mechanical state |
-| `feed_report` | `11` (confirm) | Integer 0–50 | portions dispensed in the last feed |
-| `manual_feed` | `3` (confirm) | Integer 1–50 | command: dispense N portions now |
-| `meal_plan` | `1` (confirm) | Raw (base64) | on-device feeding schedule |
-| (food level) | `108` | Enum full/… | **HOPPER food-storage level** (IR sensor) |
-| `battery_percentage` | `14` (confirm) | Integer | mains-powered; ignored |
-| `voice_times` | `18` | Integer | not used |
+All dp numbers below are **confirmed** by a live test feed (`set_value(3,1)` →
+dispensed, observed):
 
-Local dp numbers marked "(confirm)" are disambiguated at build by triggering one test
-feed and watching which dp changes (`11` vs `14` both read 0 at rest). `FeederDevice`
-keeps these as named constants so the unit tests (which use a fake keyed by the same
-constants) are independent of the final numbers.
+| local dp | meaning | confirmed behavior |
+|----------|---------|--------------------|
+| `3` | **manual_feed** (write-only command) | `set_value(3, N)` dispenses N portions; absent from status reads |
+| `4` | **feed_state** enum | cycles `standby`→`feeding`→`standby`→`feed_end` (cloud enum omits `feed_end`) |
+| `118` | **feed record** (Raw base64) | the reliable dispense signal — appears on each feed; see decode below |
+| `108` | **food_level** enum | hopper IR level; read `full` (persistent) |
+| `1` | meal_plan (Raw base64) | `AA==` = no schedule set |
+| `11`, `14` | **UNUSED** | both stayed `0` through a confirmed dispense — NOT a portion counter; discarded |
+| `18`,`103`,`109`,`112`,`113`,`116` | voice/misc | not used |
+
+**dp 118 feed-record format** (10 bytes, confirmed against the test feed):
+`[year_hi, year_lo, month, day, hour, min, sec, portions, type, flag]` — e.g.
+`07 EA 06 16 16 23 28 01 02 00` = `2026-06-22 22:35:40`, `portions=1`. Because dp 118
+**persists the last feed** (it's a record, not a transient edge), a slow poll reads it
+reliably: when the decoded timestamp advances, a new feed happened (with its portion
+count). **This is what makes adherence monitoring reliable without fast/windowed
+polling** — the original concern (catching a ~10s `feeding` edge) is moot.
+
+**Cloud control is NOT available** for this device: `manual_feed` via the cloud API
+returns `1109 param is illegal`. Local control is the only working path — which
+vindicates the local-control decision below.
 
 **For the EATING signal, the feeder still reports DISPENSING, not CONSUMPTION** — no
-bowl weight, no bowl camera. Phase 1 monitors *that food was delivered* and *that the
-hopper still has food*, not *that a cat ate*. The "are they eating" signal remains
-**Phase 2** (a bowl camera, `meowcam5`, full/empty vision) — out of scope here.
+bowl weight, no bowl camera. Phase 1 monitors *that food was delivered* (dp 118) and
+*that the hopper still has food* (dp 108), not *that a cat ate*. The "are they eating"
+signal remains **Phase 2** (a bowl camera, `meowcam5`, full/empty vision) — out of
+scope here.
 
 **New in Phase 1 from discovery — hopper-level alert (dp 108):** the feeder senses
 whether its food *storage* is full/empty. Phase 1 adds a **"feeder out of food"**
@@ -82,22 +93,29 @@ config: mealtimes + thresholds  ─────┘      verify adherence, alert)
   with a named dp-constant block (`DP_FEED_STATE="4"`, `DP_FEED_REPORT="11"`,
   `DP_MANUAL_FEED="3"`, `DP_MEAL_PLAN="1"`, `DP_FOOD_LEVEL="108"` — the "(confirm)"
   ones verified at build):
-  - `status() -> dict` → `{"feed_state", "feed_report", "food_level", "online"}`
+  - `status() -> dict` → `{"feed_state", "food_level", "last_feed", "online"}`
     (best-effort; on a local I/O error returns `{"online": False}` rather than
-    raising). `food_level` is the dp-108 enum (e.g. `"full"`).
-  - `feed(portions) -> bool` → writes `manual_feed`; True on confirmed send.
-  - `read_meal_plan() -> str|None` → raw base64 of `meal_plan` (for the optional
-    decode enhancement).
+    raising). `food_level` is the dp-108 enum (e.g. `"full"`); `last_feed` is the
+    decoded dp-118 record `{"ts": <epoch>, "portions": <int>}` or `None` if no feed
+    recorded yet. A pure `decode_feed_record(b64) -> {"ts","portions"}|None` helper is
+    unit-tested directly (the 10-byte format above).
+  - `feed(portions) -> bool` → `set_value(3, portions)` (local dp 3); True on confirmed
+    send. (Cloud control is unavailable — `1109`.)
   - Holds the feeder's own `device_id`/`local_key`/`address`/`version` (separate from
     the SC10's), read from a `feeder` config block. Discovered: `address=192.168.2.84`,
     `version=3.4`.
 - `FeederMonitor(device, conn, notify, mealtimes, now_fn=time.time, ...)` — the
   watchdog, testable with a fake `FeederDevice`:
-  - Polls `status()` each cycle. Detects a **dispense** on a `feed_state`
-    standby→feeding edge (and/or a `feed_report` change) → `store.log_feed_event`.
+  - Polls `status()` each cycle. Detects a **dispense** when `last_feed["ts"]` is newer
+    than the last logged feed's ts (dp 118 persists, so this is reliable regardless of
+    poll timing) → `store.log_feed_event(portions, source, ts)`. Source is `manual` if
+    a `/feed` was issued within a short expectation window (`note_manual_feed()` sets
+    it), else `scheduled`. dp 118 is the single logging point — no double-count.
   - **Adherence check:** for each scheduled mealtime, once the mealtime + a grace
     window has passed with no logged dispense in `[mealtime, mealtime+window]`, fire a
-    missed-drop alert (once per mealtime per day; re-arms next day).
+    missed-drop alert (once per mealtime per day; re-arms next day). Reliable now that
+    dp 118 gives authoritative feed timestamps. (Moot until `mealtimes` is configured —
+    `meal_plan` is currently empty.)
   - **Unreachable check:** if `status()` reports `online: False` for longer than
     `offline_minutes`, fire an unreachable alert (latched, re-arms on recovery).
   - **Hopper-empty check:** if `food_level` is not `full` (e.g. `empty`/`low`), fire a
@@ -172,17 +190,17 @@ build-time work that may not crack cleanly. To avoid blocking Phase 1 on it:
 - `FeederDevice` local I/O is integration-tested manually at build (real device); unit
   tests use the fake.
 
-## Build-time discovery tasks (not code; prerequisites)
+## Build-time discovery — ALL DONE (recorded above)
 
-1. ~~scan for IP/version~~ **DONE**: `address=192.168.2.84`, `version=3.4`, `local_key`
-   pulled. The `feeder` block is written into gitignored config.json.
-2. Confirm `feed_report`/`manual_feed`/`battery` dp numbers by triggering ONE test
-   `manual_feed=1` and watching which dp changes (`11` vs `14`). (Dispenses 1 portion —
-   do with owner awareness.) Update the dp constants if needed.
-3. Attempt the `meal_plan` (dp 1) decode (set a known schedule in the app, read the
-   base64, reverse it). If it doesn't crack quickly, fall back to config mealtimes +
-   bead. Confirm `food_level` (dp 108) enum range (`full`/`empty`/`low`?) for the
-   hopper-empty threshold.
+- IP/version/key: `192.168.2.84` / `3.4` / pulled → `feeder` block in gitignored config.
+- dp map confirmed by a live test feed: `3`=manual_feed, `4`=feed_state, `108`=food_level,
+  `118`=feed record (decoded), `11`/`14` discarded.
+- dp 118 decode confirmed (`[YY YY MM DD hh mm ss portions type flag]`).
+- Cloud control confirmed unavailable (`1109`) → local only.
+- Remaining unknowns (handle as they arise, not blockers): `food_level` enum values
+  other than `full` (the `low_food_levels` config lists candidates — adjust when first
+  observed); dp 118 `type`/`flag` byte semantics (we use portions + ts only);
+  outgoing `meal_plan` (dp 1) write format (system-managed scheduling is out of scope).
 
 ## Out of scope (Phase 2 / later)
 
