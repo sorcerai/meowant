@@ -179,3 +179,29 @@ def test_assess_attribution_nominal_small_drop():
     f = _facts({}, system={"attribution_pct": 65.0, "prev_attribution_pct": 70.0})
     attr = [x for x in weekly.assess(f) if x["metric"] == "attribution"][0]
     assert attr["severity"] == "nominal"
+
+
+def test_facts_only_text_renders_cats_and_system():
+    f = _facts(
+        {"Ucok": _cat(voids=20, gap_mean=6.0, gap_se=0.2, gap_n=19,
+                      prev_gap_mean=3.0, prev_gap_se=0.2, prev_gap_n=18),
+         "Ella": _cat(voids=3, gap_mean=10.0, gap_se=0.5, gap_n=2)},
+        system={"total_visits": 40, "attributed": 30, "unattributed": 10,
+                "attribution_pct": 75.0, "prev_attribution_pct": 78.0,
+                "flicker_fragments": 8})
+    findings = weekly.assess(f)
+    txt = weekly.facts_only_text(f, findings)
+    assert "Ucok" in txt and "Ella" in txt
+    assert "🚨" in txt or "⚠️" in txt        # Ucok frequency watch
+    assert "❓" in txt                          # Ella insufficient_data
+    assert "insufficient" in txt.lower() and "N=3" in txt
+    assert "75.0%" in txt                       # attribution line
+    assert "8" in txt                           # flicker count
+
+
+def test_facts_only_text_attribution_flagged_on_drop():
+    f = _facts({}, system={"total_visits": 10, "attributed": 4, "unattributed": 6,
+                           "attribution_pct": 40.0, "prev_attribution_pct": 70.0,
+                           "flicker_fragments": 2})
+    txt = weekly.facts_only_text(f, weekly.assess(f))
+    assert "⚠️" in txt and "unidentified" in txt.lower()

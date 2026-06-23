@@ -209,3 +209,44 @@ def assess(facts, prev_findings=(), *, min_void_n=5, sigma_k=2.0,
                          "value": s["attribution_pct"], "margin": None, "delta": None,
                          "evidence": f"attribution {s['attribution_pct']}%"})
     return findings
+
+
+SEV_EMOJI = {"nominal": "✅", "watch": "⚠️", "drift": "🚨", "insufficient_data": "❓"}
+
+
+def _cat_findings(findings, cat):
+    return {f["metric"]: f for f in findings if f["cat"] == cat}
+
+
+def facts_only_text(facts, findings):
+    p = facts["period"]
+    lines = [f"📊 Weekly cat report ({p['start'][:10]} → {p['end'][:10]})", ""]
+    for cat, c in facts["per_cat"].items():
+        fm = _cat_findings(findings, cat)
+        freq = fm.get("frequency", {"severity": "nominal"})
+        emoji = SEV_EMOJI.get(freq["severity"], "•")
+        if freq["severity"] == "insufficient_data":
+            lines.append(f"{emoji} {cat}: insufficient data (N={c['voids']} voids this week)")
+            continue
+        g = c["gap_h"]
+        margin = freq.get("margin")
+        gap_txt = (f"{g['mean']}h between voids" if g["mean"] is not None else "—")
+        if margin:
+            gap_txt += f" (±{margin})"
+        line = f"{emoji} {cat}: {c['voids']} voids ({c['per_day']}/day), {gap_txt}"
+        w = fm.get("weight")
+        if w and w["severity"] in ("watch", "drift"):
+            line += f" — {SEV_EMOJI[w['severity']]} weight {w['evidence']}"
+        if freq["severity"] in ("watch", "drift"):
+            line += f"\n    {SEV_EMOJI[freq['severity']]} {freq['evidence']}"
+        lines.append(line)
+    s = facts["system"]
+    attr_f = next((f for f in findings if f["metric"] == "attribution"), None)
+    attr_emoji = SEV_EMOJI.get(attr_f["severity"], "✅") if attr_f else "✅"
+    attr_line = (f"{attr_emoji} Attribution: {s['attribution_pct']}%"
+                 f" ({s['unattributed']} unattributed),"
+                 f" {s['flicker_fragments']} flicker fragments")
+    if attr_f and attr_f["severity"] == "watch":
+        attr_line += f" — {attr_f['evidence']}"
+    lines += ["", attr_line]
+    return "\n".join(lines)
