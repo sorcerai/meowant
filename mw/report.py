@@ -112,13 +112,13 @@ def digest(conn, now=None):
     today_elim = [s for s in sess if s["eliminated"] and s["enter_ts"].startswith(today)]
     if not today_elim:
         base = f"✅ Meowant alive [{today}] — no box uses yet today."
-        return base + _feeds_suffix(conn, today)
+        return base + _feeds_suffix(conn, today) + _bowl_suffix(conn)
     from collections import Counter
     by_cat = Counter((s["cat"] or "unattributed") for s in today_elim)
     last = max(s["enter_ts"] for s in today_elim)[11:16]
     parts = ", ".join(f"{c} {n}" for c, n in by_cat.most_common())
     return (f"✅ Meowant alive [{today}] — {len(today_elim)} box uses today "
-            f"(last {last}). {parts}" + _feeds_suffix(conn, today))
+            f"(last {last}). {parts}" + _feeds_suffix(conn, today) + _bowl_suffix(conn))
 
 
 def _feeds_suffix(conn, today):
@@ -126,6 +126,29 @@ def _feeds_suffix(conn, today):
     if not meals:
         return ""
     return f" 🍽️ {meals} feed(s)/{portions} portions."
+
+
+def _hours(secs):
+    return f"{secs / 3600.0:.1f}h"
+
+
+def _bowl_suffix(conn):
+    state = store.last_bowl_state(conn)
+    if not state:
+        return ""
+    secs = store.last_consumption_secs(conn)
+    tail = f", emptied ~{_hours(secs)} after a feed" if secs is not None else ""
+    return f" 🥣 bowl {state}{tail}."
+
+
+def bowl_status_text(conn):
+    """Reply for /bowl: current state + last consumption time."""
+    state = store.last_bowl_state(conn)
+    if not state:
+        return "🥣 No bowl data yet (camera not calibrated/enabled)."
+    secs = store.last_consumption_secs(conn)
+    tail = f"; last emptied ~{_hours(secs)} after a feed" if secs is not None else ""
+    return f"🥣 Bowl: {state}{tail}."
 
 
 def feed_status_text(conn, status):

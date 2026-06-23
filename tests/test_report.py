@@ -112,3 +112,38 @@ def test_feed_status_text_offline(tmp_path):
     store.init_db(conn)
     txt = report.feed_status_text(conn, {"online": False})
     assert "offline" in txt.lower() or "unreachable" in txt.lower()
+
+
+def test_digest_includes_bowl_when_data_present(tmp_path):
+    from mw import store, report
+    from datetime import date, datetime, time
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    noon = datetime.combine(date.today(), time(12, 0)).timestamp()
+    store.log_bowl_event(conn, "empty", "vision", secs_since_feed=7200, ts=noon - 10)
+    out = report.digest(conn)
+    assert "bowl" in out.lower()
+
+
+def test_digest_silent_on_bowl_when_no_data(tmp_path):
+    from mw import store, report
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    out = report.digest(conn)
+    assert "bowl" not in out.lower()        # no bowl data -> no bowl line
+
+
+def test_bowl_status_text(tmp_path):
+    from mw import store, report
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.log_bowl_event(conn, "empty", "vision", secs_since_feed=3600, ts=1_000_000.0)
+    txt = report.bowl_status_text(conn)
+    assert "empty" in txt.lower()
+
+
+def test_bowl_status_text_no_data(tmp_path):
+    from mw import store, report
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    assert "no bowl" in report.bowl_status_text(conn).lower()
