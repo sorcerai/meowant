@@ -17,21 +17,35 @@ silently passes.
 
 ## What the feeder can and cannot sense (the constraint that shapes everything)
 
-DPS discovered on the live device (Tuya category `cwwsq`, id `ebb89ffc060bf03766sphf`):
+DPS discovered on the live device (Tuya category `cwwsq`, id `ebb89ffc060bf03766sphf`).
+The cloud API exposes codes; **local enumeration revealed more dps than the cloud
+`functions` list**, including a food-level sensor. Local raw dp numbers (from a LAN
+`status()` read) cross-referenced to cloud codes:
 
-| dp | type | meaning |
-|----|------|---------|
-| `feed_report` | Integer 0–50 | portions dispensed in the last feed |
-| `feed_state` | Enum standby/feeding | current mechanical state |
-| `meal_plan` | Raw (base64) | on-device feeding schedule |
-| `manual_feed` | Integer 1–50 | command: dispense N portions now |
-| `battery_percentage` | Integer 0–100 | (device is mains-powered; ignored) |
-| `voice_times`, `factory_reset` | — | not used |
+| code | local dp | type | meaning |
+|------|----------|------|---------|
+| `feed_state` | `4` | Enum standby/feeding | current mechanical state |
+| `feed_report` | `11` (confirm) | Integer 0–50 | portions dispensed in the last feed |
+| `manual_feed` | `3` (confirm) | Integer 1–50 | command: dispense N portions now |
+| `meal_plan` | `1` (confirm) | Raw (base64) | on-device feeding schedule |
+| (food level) | `108` | Enum full/… | **HOPPER food-storage level** (IR sensor) |
+| `battery_percentage` | `14` (confirm) | Integer | mains-powered; ignored |
+| `voice_times` | `18` | Integer | not used |
 
-**The feeder reports DISPENSING, not CONSUMPTION.** No food-level sensor, no bowl
-weight. Phase 1 therefore monitors *that food was delivered*, not *that it was
-eaten*. The "are they eating" signal is **Phase 2** (a bowl camera, `meowcam5`, with
-full/empty vision) — explicitly out of scope here.
+Local dp numbers marked "(confirm)" are disambiguated at build by triggering one test
+feed and watching which dp changes (`11` vs `14` both read 0 at rest). `FeederDevice`
+keeps these as named constants so the unit tests (which use a fake keyed by the same
+constants) are independent of the final numbers.
+
+**For the EATING signal, the feeder still reports DISPENSING, not CONSUMPTION** — no
+bowl weight, no bowl camera. Phase 1 monitors *that food was delivered* and *that the
+hopper still has food*, not *that a cat ate*. The "are they eating" signal remains
+**Phase 2** (a bowl camera, `meowcam5`, full/empty vision) — out of scope here.
+
+**New in Phase 1 from discovery — hopper-level alert (dp 108):** the feeder senses
+whether its food *storage* is full/empty. Phase 1 adds a **"feeder out of food"**
+alert (hopper not `full`) — a genuine "cats will go unfed" signal, distinct from the
+Phase-2 bowl-consumption signal.
 
 ## Key decisions (owner-confirmed)
 
@@ -64,14 +78,19 @@ config: mealtimes + thresholds  ─────┘      verify adherence, alert)
 ### Components
 
 **`mw/feeder.py`**
-- `FeederDevice(cfg)` — thin local wrapper, mirroring `mw/device.py`'s `TuyaDevice`:
-  - `status() -> dict` → `{"feed_state", "feed_report", "online"}` (best-effort; on a
-    local I/O error returns `{"online": False}` rather than raising).
+- `FeederDevice(cfg)` — thin local wrapper, mirroring `mw/device.py`'s `TuyaDevice`,
+  with a named dp-constant block (`DP_FEED_STATE="4"`, `DP_FEED_REPORT="11"`,
+  `DP_MANUAL_FEED="3"`, `DP_MEAL_PLAN="1"`, `DP_FOOD_LEVEL="108"` — the "(confirm)"
+  ones verified at build):
+  - `status() -> dict` → `{"feed_state", "feed_report", "food_level", "online"}`
+    (best-effort; on a local I/O error returns `{"online": False}` rather than
+    raising). `food_level` is the dp-108 enum (e.g. `"full"`).
   - `feed(portions) -> bool` → writes `manual_feed`; True on confirmed send.
   - `read_meal_plan() -> str|None` → raw base64 of `meal_plan` (for the optional
     decode enhancement).
   - Holds the feeder's own `device_id`/`local_key`/`address`/`version` (separate from
-    the SC10's), read from a `feeder` config block.
+    the SC10's), read from a `feeder` config block. Discovered: `address=192.168.2.84`,
+    `version=3.4`.
 - `FeederMonitor(device, conn, notify, mealtimes, now_fn=time.time, ...)` — the
   watchdog, testable with a fake `FeederDevice`:
   - Polls `status()` each cycle. Detects a **dispense** on a `feed_state`
@@ -81,8 +100,12 @@ config: mealtimes + thresholds  ─────┘      verify adherence, alert)
     missed-drop alert (once per mealtime per day; re-arms next day).
   - **Unreachable check:** if `status()` reports `online: False` for longer than
     `offline_minutes`, fire an unreachable alert (latched, re-arms on recovery).
+  - **Hopper-empty check:** if `food_level` is not `full` (e.g. `empty`/`low`), fire a
+    "feeder low/out of food" alert (latched, re-arms when it reads `full` again).
   - Latch + re-arm + **fail-loud-on-delivery** (`if notify(msg) is not False:`),
-    matching `mw/health_watch.py`, `mw/deadman.py`, `mw/invariant_canary.py`.
+    matching `mw/health_watch.py`, `mw/deadman.py`, `mw/invariant_canary.py`. Each
+    independent check has its own latch (a missed drop, an outage, and a low hopper can
+    coexist) — one latch per concern, like `mw/deadman.py`'s per-key latches.
 
 **`mw/store.py`** — new `feed_events` table (added to `SCHEMA`, not `_MIGRATIONS`):
 `id, ts, portions, source` (`source` = `scheduled` | `manual`). Functions:
@@ -96,14 +119,17 @@ as a daemon thread, gated on `feeder.enabled` AND a `feeder.device_id` being pre
 **Telegram** (`meowantd.py` command dict + `mw/telegram_bot.py` already supports it):
 - `/feed N` — owner-allowlisted; dispense N portions (`FeederDevice.feed`), reply with
   the result; log as `source="manual"`. (Allowlist is the existing security boundary.)
-- `/feedstatus` — last dispense (from `feed_events`), current `feed_state`, online.
+- `/feedstatus` — last dispense (from `feed_events`), current `feed_state`, hopper
+  `food_level`, online.
 
 **`mw/report.py`** — add a "feeds today: N meals / M portions" line to `digest`.
 
 **Config** (`config.json`, gitignored) — a `feeder` block:
 `{enabled, device_id, local_key, address, version, poll_interval_s, mealtimes:
-["07:00","18:00"], miss_grace_minutes, offline_minutes}`. The `device_id`
-(`ebb89ffc…`) and pulled `local_key` live only here.
+["07:00","18:00"], miss_grace_minutes, offline_minutes, low_food_levels:
+["empty","low"]}`. The `device_id` (`ebb89ffc…`), `local_key`, `address`
+(`192.168.2.84`), `version` (`3.4`) live only here. `low_food_levels` lists the dp-108
+enum values that count as "needs a refill" (confirmed at build).
 
 ## Schedule monitoring: source of truth (de-risked)
 
@@ -137,6 +163,8 @@ build-time work that may not crack cleanly. To avoid blocking Phase 1 on it:
   - missed-drop fires once after grace past a mealtime with no dispense; silent if a
     dispense landed in the window; re-arms the next day.
   - unreachable fires after `offline_minutes`; recovers/re-arms.
+  - hopper-empty fires when `food_level` enters a `low_food_levels` value; silent while
+    `full`; re-arms on return to `full`.
   - fail-loud: a notify returning False does not latch (retries next cycle).
 - `store.feed_events`: log + `feed_events_today` + `recent_feed_events` round-trip.
 - `report.digest` includes the feeds line.
@@ -146,13 +174,15 @@ build-time work that may not crack cleanly. To avoid blocking Phase 1 on it:
 
 ## Build-time discovery tasks (not code; prerequisites)
 
-1. `tinytuya` scan to get the feeder's LAN IP + protocol version; pull `local_key`
-   (the `cmd_refresh_key` cloud path already does the key); write the `feeder` block
-   into gitignored config.json.
-2. Confirm local control works against the real device (read `status`, a test
-   `manual_feed` of 1 portion).
-3. Attempt the `meal_plan` decode (set a known schedule in the app, read the base64,
-   reverse it). If it doesn't crack quickly, fall back to config mealtimes + bead.
+1. ~~scan for IP/version~~ **DONE**: `address=192.168.2.84`, `version=3.4`, `local_key`
+   pulled. The `feeder` block is written into gitignored config.json.
+2. Confirm `feed_report`/`manual_feed`/`battery` dp numbers by triggering ONE test
+   `manual_feed=1` and watching which dp changes (`11` vs `14`). (Dispenses 1 portion —
+   do with owner awareness.) Update the dp constants if needed.
+3. Attempt the `meal_plan` (dp 1) decode (set a known schedule in the app, read the
+   base64, reverse it). If it doesn't crack quickly, fall back to config mealtimes +
+   bead. Confirm `food_level` (dp 108) enum range (`full`/`empty`/`low`?) for the
+   hopper-empty threshold.
 
 ## Out of scope (Phase 2 / later)
 
