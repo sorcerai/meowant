@@ -9,7 +9,7 @@ import base64
 import sys
 import threading
 import time
-from datetime import datetime, date
+from datetime import datetime
 from mw import store
 
 DP_MANUAL_FEED = 3        # write-only: set_value(3, portions) dispenses
