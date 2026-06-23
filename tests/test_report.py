@@ -147,3 +147,22 @@ def test_bowl_status_text_no_data(tmp_path):
     conn = store.connect(str(tmp_path / "t.db"))
     store.init_db(conn)
     assert "no bowl" in report.bowl_status_text(conn).lower()
+
+
+def test_weekly_status_text_no_report(tmp_path):
+    from mw import store, report
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    assert "no weekly" in report.weekly_status_text(conn).lower()
+
+
+def test_weekly_status_text_returns_latest(tmp_path):
+    from mw import store, report
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.log_weekly_report(conn, "2026-06-16T00:00:00", "2026-06-23T00:00:00",
+                            "{}", "[]", None, ts=1_000_000.0)
+    # Phase 1 stores no narrative; the rendered table is rebuilt on demand from
+    # facts — but for the no-narrative case we surface a pointer to the period.
+    txt = report.weekly_status_text(conn)
+    assert "2026-06-23" in txt

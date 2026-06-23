@@ -161,3 +161,18 @@ def feed_status_text(conn, status):
                 f"({last['portions']}p, {last['source']})") if last else "no feeds logged"
     return (f"🍽️ Feeder online — state {status.get('feed_state')}, "
             f"hopper {status.get('food_level')}; {last_txt}")
+
+
+def weekly_status_text(conn):
+    """Reply for /weekly: rebuild the latest stored weekly table on demand."""
+    rep = store.latest_weekly_report(conn)
+    if not rep:
+        return "📊 No weekly report yet (first one lands after a full week)."
+    import json
+    from mw import weekly
+    try:
+        facts = json.loads(rep["facts_json"])
+        findings = json.loads(rep["findings_json"]) if rep["findings_json"] else []
+        return weekly.facts_only_text(facts, findings)
+    except Exception:
+        return f"📊 Weekly report for {rep['period_start'][:10]} → {rep['period_end'][:10]} (stored)."

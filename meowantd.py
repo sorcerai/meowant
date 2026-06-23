@@ -130,6 +130,18 @@ def main():
             threading.Thread(target=canary.run, daemon=True).start()
             print("invariant-canary: raw-vs-attributed elimination check")
 
+        # Weekly per-cat consolidation + statistical gatekeeper (chronic-drift
+        # report). Deterministic (no LLM in Phase 1). Pull-recoverable via /weekly.
+        if config.get(cfg, "weekly.enabled", False):
+            from mw.weekly import WeeklyAnalyst
+            analyst = WeeklyAnalyst(
+                conn, make_notify(lambda k: config.get(cfg, k)),
+                state_path=config.get(cfg, "weekly.state_path", "weekly_state.json"),
+                interval_days=config.get(cfg, "weekly.interval_days", 7),
+                min_void_n=config.get(cfg, "weekly.min_void_n", 5))
+            threading.Thread(target=analyst.run, daemon=True).start()
+            print("weekly-analyst: per-cat 7d consolidation + gatekeeper")
+
         # Litter-scatter detector: per-visit floor delta on meowcam3 (pin a clean
         # reference at cat-enter, score post-leave frames) -> 'time to sweep' alert.
         from mw.scatter_detector import ScatterDetector
@@ -267,7 +279,8 @@ def main():
             "/health": lambda: report.health_report(conn),
             "/incidents": lambda: report.incidents_report(conn),
             "/bowl": lambda: report.bowl_status_text(conn),
-            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents /feed /feedstatus /bowl",
+            "/weekly": lambda: report.weekly_status_text(conn),
+            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents /feed /feedstatus /bowl /weekly",
         }, label_cb=_label_cb)
         threading.Thread(target=bot.run, daemon=True).start()
         print("telegram-bot: inbound commands (/cats /status /health /incidents), owner-allowlisted")
