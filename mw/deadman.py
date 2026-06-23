@@ -99,9 +99,13 @@ class DeadManSwitch:
         return out
 
     def _load_state(self):
+        # A valid-JSON-but-non-dict latch file (e.g. "[1,2,3]") would make every
+        # state.get() in _fire raise — which run_once's fail-loud except would then
+        # re-trigger, crashing uncaught and silencing ALL alerts forever. Coerce.
         try:
             with open(self.state_path) as f:
-                return json.load(f)
+                s = json.load(f)
+            return s if isinstance(s, dict) else {}
         except Exception:
             return {}
 
@@ -118,9 +122,15 @@ class DeadManSwitch:
             age_h = (self.now() - datetime.fromisoformat(last).timestamp()) / 3600.0
             if age_h < self.realarm_hours:
                 return 0                              # latched — re-fire later
-        self.notify(msg)
-        state[key] = datetime.fromtimestamp(self.now()).isoformat(timespec="seconds")
-        return 1
+        # Latch ONLY on confirmed delivery, else a dead Telegram token would mark the
+        # alert "sent" and re-suppress it every realarm window — failing MUTE forever.
+        # An explicit False means the transport failed; None (a stub with no signal)
+        # is treated as delivered so older notify callables keep working.
+        ok = self.notify(msg)
+        if ok is not False:
+            state[key] = datetime.fromtimestamp(self.now()).isoformat(timespec="seconds")
+            return 1
+        return 0
 
     def run_once(self):
         state = self._load_state()

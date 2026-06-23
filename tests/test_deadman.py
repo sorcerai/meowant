@@ -150,3 +150,43 @@ def test_run_once_fails_loud_on_exception(tmp_path):
     sw.run_once()
     assert any("dead-man" in m.lower() and ("error" in m.lower() or "boom" in m.lower())
                for m in sent)                        # screamed instead of dying silently
+
+
+def test_run_once_survives_corrupt_nondict_state(tmp_path):
+    # A valid-JSON-but-non-dict latch file must NOT silence every future run.
+    conn = _db(tmp_path)
+    base = time.mktime(time.strptime("2026-06-22 14:00", "%Y-%m-%d %H:%M"))
+    _elim(conn, base - 13 * 3600)
+    st = tmp_path / "st.json"
+    st.write_text("[1,2,3]")                          # corrupt: a list, not a dict
+    sent = []
+    sw = DeadManSwitch(conn, notify=sent.append, now_fn=lambda: base, no_go_hours=12,
+                       state_path=str(st),
+                       state_probe=lambda: {"last_ok_ts": base - 5})  # daemon healthy
+    fired = sw.run_once()                             # must not crash
+    assert fired >= 1
+    assert any("no litter box use" in m.lower() for m in sent)
+
+
+def test_run_once_does_not_latch_on_failed_delivery(tmp_path):
+    # If notify reports failure (False), the alert must NOT latch — it is re-attempted
+    # on the very next run (a dead token must never make the switch fail MUTE forever).
+    conn = _db(tmp_path)
+    base = time.mktime(time.strptime("2026-06-22 14:00", "%Y-%m-%d %H:%M"))
+    _elim(conn, base - 13 * 3600)
+    st = str(tmp_path / "st.json")
+    attempts = []
+
+    def failing_notify(m):
+        attempts.append(m)                            # transport down (e.g. bad token)
+        return False
+
+    DeadManSwitch(conn, notify=failing_notify, now_fn=lambda: base, no_go_hours=12,
+                  realarm_hours=3, state_path=st,
+                  state_probe=lambda: {"last_ok_ts": base - 5}).run_once()
+    DeadManSwitch(conn, notify=failing_notify, now_fn=lambda: base, no_go_hours=12,
+                  realarm_hours=3, state_path=st,
+                  state_probe=lambda: {"last_ok_ts": base - 5}).run_once()
+    # both runs re-attempted delivery (not latched after a failure)
+    assert len(attempts) == 2
+    assert all("no litter box use" in m.lower() for m in attempts)
