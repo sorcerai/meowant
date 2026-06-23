@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS incidents(
 CREATE TABLE IF NOT EXISTS feed_events(
   id INTEGER PRIMARY KEY, ts TEXT, portions INTEGER,
   source TEXT);          -- 'scheduled' | 'manual'
+CREATE TABLE IF NOT EXISTS bowl_events(
+  id INTEGER PRIMARY KEY, ts TEXT, state TEXT,
+  source TEXT,            -- 'vision' | 'auto_feed'
+  secs_since_feed INTEGER);
 """
 
 # Columns added after the initial schema shipped; applied idempotently on init.
@@ -298,6 +302,52 @@ def feed_events_today(conn, day=None):
 def recent_feed_events(conn, limit=20):
     with _lock:
         rows = conn.execute("SELECT * FROM feed_events ORDER BY id DESC LIMIT ?",
+                            (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def log_bowl_event(conn, state, source="vision", secs_since_feed=None, ts=None):
+    """Record a bowl observation ('vision') or an auto-feed bookkeeping row."""
+    stamp = _iso(ts) if ts is not None else datetime.now().isoformat(timespec="seconds")
+    with _lock:
+        conn.execute(
+            "INSERT INTO bowl_events(ts, state, source, secs_since_feed) "
+            "VALUES(?,?,?,?)", (stamp, state, source, secs_since_feed))
+        conn.commit()
+
+
+def last_bowl_state(conn):
+    """Most recent vision-observed bowl state (ignores auto_feed bookkeeping rows)."""
+    with _lock:
+        row = conn.execute(
+            "SELECT state FROM bowl_events WHERE source='vision' "
+            "ORDER BY id DESC LIMIT 1").fetchone()
+        return row["state"] if row else None
+
+
+def auto_feeds_today(conn):
+    """Count of auto-feed dispenses today — the BowlWatch rate-limit primitive."""
+    today = date.today().isoformat()
+    with _lock:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM bowl_events "
+            "WHERE source='auto_feed' AND ts LIKE ?", (today + "%",)).fetchone()
+        return row["n"]
+
+
+def last_consumption_secs(conn):
+    """secs_since_feed of the most recent vision 'empty' event that has one."""
+    with _lock:
+        row = conn.execute(
+            "SELECT secs_since_feed FROM bowl_events "
+            "WHERE source='vision' AND state='empty' AND secs_since_feed IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1").fetchone()
+        return row["secs_since_feed"] if row else None
+
+
+def recent_bowl_events(conn, limit=20):
+    with _lock:
+        rows = conn.execute("SELECT * FROM bowl_events ORDER BY id DESC LIMIT ?",
                             (limit,)).fetchall()
         return [dict(r) for r in rows]
 

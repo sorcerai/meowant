@@ -292,13 +292,13 @@ def test_feed_events_log_and_query(tmp_path):
 
 def test_feed_events_today_aggregates(tmp_path):
     from mw import store
-    from datetime import date, datetime
+    from datetime import date, datetime, time
     conn = store.connect(str(tmp_path / "t.db"))
     store.init_db(conn)
-    # two feeds "today" (use now so the local-day filter matches), one portions 2 + one 1
-    now = datetime.now().timestamp()
-    store.log_feed_event(conn, 2, "scheduled", ts=now - 100)
-    store.log_feed_event(conn, 1, "manual", ts=now - 50)
+    # anchor to noon today so the offsets can't cross midnight (today-filter is date-based)
+    noon = datetime.combine(date.today(), time(12, 0)).timestamp()
+    store.log_feed_event(conn, 2, "scheduled", ts=noon)
+    store.log_feed_event(conn, 1, "manual", ts=noon + 50)
     meals, portions = store.feed_events_today(conn)
     assert meals == 2 and portions == 3
 
@@ -308,3 +308,40 @@ def test_last_feed_event_ts_empty_is_none(tmp_path):
     conn = store.connect(str(tmp_path / "t.db"))
     store.init_db(conn)
     assert store.last_feed_event_ts(conn) is None
+
+
+def test_bowl_events_log_and_query(tmp_path):
+    from mw import store
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    T = 1_000_000.0
+    store.log_bowl_event(conn, "full", "vision", ts=T)
+    store.log_bowl_event(conn, "empty", "vision", secs_since_feed=7200, ts=T + 100)
+    assert store.last_bowl_state(conn) == "empty"
+    assert store.last_consumption_secs(conn) == 7200
+    rows = store.recent_bowl_events(conn)
+    assert len(rows) == 2 and rows[0]["state"] == "empty"
+
+
+def test_auto_feeds_today_counts_only_today_autofeeds(tmp_path):
+    from mw import store
+    from datetime import date, datetime, time
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    # anchor to noon today so the offsets can't cross midnight (today-filter is date-based)
+    noon = datetime.combine(date.today(), time(12, 0)).timestamp()
+    store.log_bowl_event(conn, "empty", "auto_feed", ts=noon)
+    store.log_bowl_event(conn, "empty", "auto_feed", ts=noon + 30)
+    store.log_bowl_event(conn, "empty", "vision", ts=noon + 40)   # not an auto_feed
+    store.log_bowl_event(conn, "empty", "auto_feed", ts=1_000.0)  # old (1970) — not today
+    assert store.auto_feeds_today(conn) == 2
+
+
+def test_last_bowl_state_ignores_autofeed_rows(tmp_path):
+    from mw import store
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    T = 1_000_000.0
+    store.log_bowl_event(conn, "full", "vision", ts=T)
+    store.log_bowl_event(conn, "empty", "auto_feed", ts=T + 50)   # bookkeeping, not a vision read
+    assert store.last_bowl_state(conn) == "full"
