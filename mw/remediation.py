@@ -79,19 +79,33 @@ class Remediator:
         self.window_s = window_s
 
     def handle(self, kind, signal, playbook):
-        # Rate-limit on prior ESCALATIONS only: recoveries/suppressions never
-        # bothered the owner, so they must not count toward the quiet threshold.
-        after = store._iso(self.now() - self.window_s)
-        if store.incidents_since(self.conn, kind, after,
-                                 outcomes=("escalated",)) >= self.max_per_window:
-            store.log_incident(self.conn, kind, signal,
-                               "rate-limited (too many escalations recently)",
-                               "suppressed", ts=self.now())
-            return "suppressed"
-        res = playbook()
-        outcome = "recovered" if res["resolved"] else "escalated"
-        store.log_incident(self.conn, kind, signal, res["action"], outcome,
-                           ts=self.now())
-        if not res["resolved"]:
-            self.notify(res["escalate"])
-        return outcome
+        try:
+            # Rate-limit on prior ESCALATIONS only: recoveries/suppressions never
+            # bothered the owner, so they must not count toward the quiet threshold.
+            after = store._iso(self.now() - self.window_s)
+            if store.incidents_since(self.conn, kind, after,
+                                     outcomes=("escalated",)) >= self.max_per_window:
+                store.log_incident(self.conn, kind, signal,
+                                   "rate-limited (too many escalations recently)",
+                                   "suppressed", ts=self.now())
+                return "suppressed"
+            res = playbook()
+            outcome = "recovered" if res["resolved"] else "escalated"
+            store.log_incident(self.conn, kind, signal, res["action"], outcome,
+                               ts=self.now())
+            if not res["resolved"]:
+                self.notify(res["escalate"])
+            return outcome
+        except Exception as e:
+            # Fail LOUD: a remediation that errors must still page the owner
+            # (spec: "a remediation that errors -> escalate"). Get the alert out
+            # FIRST, then best-effort record it — the audit write itself may be
+            # what broke, so its failure must not swallow the alert.
+            self.notify(f"🚨 Remediation for '{kind}' ERRORED ({e}) — investigate; "
+                        f"monitoring integrity for this check is unknown")
+            try:
+                store.log_incident(self.conn, kind, signal,
+                                   f"playbook raised: {e}", "failed", ts=self.now())
+            except Exception:
+                pass
+            return "failed"

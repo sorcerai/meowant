@@ -117,3 +117,31 @@ def test_stream_playbook_waits_before_reprobing():
     stream_down_playbook("c", reprobe=lambda: True,
                          sleep=lambda s: waited.append(s), wait_s=7)
     assert waited == [7]                                # debounce delay honored
+
+
+def test_raising_playbook_fails_loud_not_silent(tmp_path):
+    conn = _db(tmp_path)
+    msgs = []
+    r = Remediator(conn, notify=msgs.append, now_fn=lambda: T)
+
+    def _boom():
+        raise ValueError("playbook blew up")
+
+    outcome = r.handle("labeler_stall", {"x": 1}, _boom)   # must NOT propagate
+    assert outcome == "failed"
+    assert len(msgs) == 1 and "ERRORED" in msgs[0]          # owner was paged
+    row = store.recent_incidents(conn)[0]                   # failure was recorded
+    assert row["outcome"] == "failed"
+    assert "playbook raised" in row["action_taken"]
+
+
+def test_handle_survives_a_broken_audit_log(tmp_path):
+    # If even the incident write is what's broken, the owner must STILL be paged.
+    conn = _db(tmp_path)
+    msgs = []
+    r = Remediator(conn, notify=msgs.append, now_fn=lambda: T)
+    conn.close()                                            # force every store call to raise
+    outcome = r.handle("stream_down", {}, lambda: {"action": "a", "resolved": False,
+                                                   "escalate": "x"})
+    assert outcome == "failed"
+    assert msgs and "ERRORED" in msgs[0]                    # paged despite dead DB
