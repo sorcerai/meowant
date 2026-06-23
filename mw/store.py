@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS incidents(
   action_taken TEXT,      -- what the playbook attempted
   outcome TEXT,           -- 'recovered' | 'escalated' | 'suppressed' | 'failed'
   notes TEXT);
+CREATE TABLE IF NOT EXISTS feed_events(
+  id INTEGER PRIMARY KEY, ts TEXT, portions INTEGER,
+  source TEXT);          -- 'scheduled' | 'manual'
 """
 
 # Columns added after the initial schema shipped; applied idempotently on init.
@@ -253,6 +256,50 @@ def eliminations_today(conn, day=None):
             "SELECT COUNT(*) FROM visits WHERE eliminated=1 AND enter_ts LIKE ?",
             (prefix + "%",)).fetchone()
         return row[0]
+
+
+def log_feed_event(conn, portions, source, ts=None):
+    """Record one dispense (from the dp-118 feed record or a manual /feed)."""
+    stamp = _iso(ts) if ts is not None else datetime.now().isoformat(timespec="seconds")
+    with _lock:
+        conn.execute("INSERT INTO feed_events(ts, portions, source) VALUES(?,?,?)",
+                     (stamp, int(portions), source))
+        conn.commit()
+
+
+def last_feed_event_ts(conn):
+    """Epoch of the most recent feed event, or None — drives new-feed detection."""
+    with _lock:
+        row = conn.execute("SELECT MAX(ts) AS m FROM feed_events").fetchone()
+    if not row or row["m"] is None:
+        return None
+    return datetime.fromisoformat(row["m"]).timestamp()
+
+
+def feed_in_window(conn, start_epoch, end_epoch):
+    """True if any feed event landed in [start, end] (inclusive)."""
+    with _lock:
+        row = conn.execute(
+            "SELECT 1 FROM feed_events WHERE ts>=? AND ts<=? LIMIT 1",
+            (_iso(start_epoch), _iso(end_epoch))).fetchone()
+        return row is not None
+
+
+def feed_events_today(conn, day=None):
+    """(meals, total_portions) for the given local day (default today)."""
+    day = day or date.today().isoformat()
+    with _lock:
+        row = conn.execute(
+            "SELECT COUNT(*) AS meals, COALESCE(SUM(portions),0) AS portions "
+            "FROM feed_events WHERE ts LIKE ?", (day + "%",)).fetchone()
+        return row["meals"], row["portions"]
+
+
+def recent_feed_events(conn, limit=20):
+    with _lock:
+        rows = conn.execute("SELECT * FROM feed_events ORDER BY id DESC LIMIT ?",
+                            (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
 
 def elimination_attribution_stats(conn, after_iso, before_iso):
