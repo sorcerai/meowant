@@ -51,8 +51,13 @@ partial — consolidating to the SC10 before travel makes it complete (separate 
 Extend the existing watchdogs (`capture_health`, `health_watch`) from **notify-only** to
 **detect → attempt a hardcoded fix → verify → log → escalate-if-unfixed**. Plain Python,
 deterministic, idempotent, rate-limited. Covers only KNOWN incidents:
-- **labeler stall** → check agy on PATH + backlog; `launchctl kickstart -k`; verify
-  backlog drains. (The real incident hit 2026-06-22.)
+- **labeler stall** → check agy on PATH + backlog; **diagnose-and-escalate, NOT
+  restart** (resolved 2026-06-22, owner-confirmed): the labeler is a thread inside
+  meowantd, so `kickstart -k` is process self-suicide that can't verify the fix, and
+  restart churn *caused* the 2026-06-22 stall. Process death is covered by launchd
+  KeepAlive and wedged-but-alive by the dead-man's liveness probe, so an in-process
+  restart adds risk, not coverage. Auto-restart, if ever wanted, belongs only in the
+  dead-man's switch's separate process. ~~`launchctl kickstart -k`~~
 - **stream down** → re-probe; brief wait; if persistent, escalate.
 - **(extend as new known incidents recur)**
 
