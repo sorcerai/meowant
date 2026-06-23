@@ -345,3 +345,22 @@ def test_last_bowl_state_ignores_autofeed_rows(tmp_path):
     store.log_bowl_event(conn, "full", "vision", ts=T)
     store.log_bowl_event(conn, "empty", "auto_feed", ts=T + 50)   # bookkeeping, not a vision read
     assert store.last_bowl_state(conn) == "full"
+
+
+def test_weekly_report_log_latest_recent():
+    conn = store.connect(":memory:")
+    store.init_db(conn)
+    rid = store.log_weekly_report(
+        conn, "2026-06-16T00:00:00", "2026-06-23T00:00:00",
+        '{"period":{"days":7}}', '[{"cat":"Ucok","severity":"nominal"}]',
+        None, ts=1_000_000.0)
+    assert isinstance(rid, int)
+    latest = store.latest_weekly_report(conn)
+    assert latest["period_start"] == "2026-06-16T00:00:00"
+    assert latest["facts_json"] == '{"period":{"days":7}}'
+    assert latest["narrative_json"] is None
+    store.log_weekly_report(conn, "2026-06-09T00:00:00", "2026-06-16T00:00:00",
+                            "{}", "[]", None, ts=900_000.0)
+    recent = store.recent_weekly_reports(conn, limit=8)
+    assert len(recent) == 2
+    assert recent[0]["period_end"] == "2026-06-23T00:00:00"   # newest first

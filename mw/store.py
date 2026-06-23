@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS bowl_events(
   id INTEGER PRIMARY KEY, ts TEXT, state TEXT,
   source TEXT,            -- 'vision' | 'auto_feed'
   secs_since_feed INTEGER);
+CREATE TABLE IF NOT EXISTS weekly_reports(
+  id INTEGER PRIMARY KEY, ts TEXT,
+  period_start TEXT, period_end TEXT,
+  facts_json TEXT, findings_json TEXT, narrative_json TEXT);
 """
 
 # Columns added after the initial schema shipped; applied idempotently on init.
@@ -165,6 +169,36 @@ def incident_rollup(conn):
             "SELECT kind, outcome, COUNT(*) AS n FROM incidents "
             "GROUP BY kind, outcome ORDER BY n DESC").fetchall()
         return [dict(r) for r in rows]
+
+
+def log_weekly_report(conn, period_start, period_end, facts_json,
+                      findings_json, narrative_json=None, ts=None):
+    """Persist one weekly snapshot. facts/findings/narrative are JSON strings
+    (narrative None in Phase 1). ts is epoch float (None -> wall-clock now)."""
+    stamp = _iso(ts) if ts is not None else datetime.now().isoformat(timespec="seconds")
+    with _lock:
+        cur = conn.execute(
+            "INSERT INTO weekly_reports(ts, period_start, period_end, "
+            "facts_json, findings_json, narrative_json) VALUES(?,?,?,?,?,?)",
+            (stamp, period_start, period_end, facts_json, findings_json, narrative_json))
+        conn.commit()
+        return cur.lastrowid
+
+
+def latest_weekly_report(conn):
+    """Newest weekly report as a dict, or None."""
+    with _lock:
+        row = conn.execute(
+            "SELECT * FROM weekly_reports ORDER BY ts DESC, id DESC LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
+def recent_weekly_reports(conn, limit=8):
+    """Newest-first weekly reports."""
+    with _lock:
+        rows = conn.execute(
+            "SELECT * FROM weekly_reports ORDER BY ts DESC, id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def recent_visits(conn, limit=20):
