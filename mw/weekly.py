@@ -133,8 +133,18 @@ def collect_facts(conn, now, *, cats=CATS):
     }
 
 
-def _significant(delta, se_a, se_b, sigma_k):
+def _significant(delta, se_a, se_b, sigma_k, ref_mean=None, rel_floor=0.25):
     combined = math.sqrt((se_a or 0.0) ** 2 + (se_b or 0.0) ** 2)
+    if combined == 0.0:
+        # No observed variance (tiny n / identical readings): there's no
+        # statistical basis for a t-style test, so require a RELATIVE change
+        # vs the prior mean — ignores rounding drift, still catches a real
+        # doubling. If we can't form a ref, call it not-significant (gatekeeper
+        # prefers a miss over a false alarm; acute changes are caught elsewhere).
+        if not ref_mean:
+            return False, 0.0
+        margin = abs(ref_mean) * rel_floor
+        return abs(delta) > margin, round(margin, 3)
     margin = round(sigma_k * combined, 3)
     return abs(delta) > margin, margin
 
@@ -143,7 +153,8 @@ def _persists(prev_findings, cat, metric, delta):
     for p in prev_findings or ():
         if (p.get("cat") == cat and p.get("metric") == metric
                 and p.get("severity") in ("watch", "drift")
-                and (p.get("delta") or 0.0) * delta > 0):   # same direction
+                and p.get("delta") is not None
+                and p["delta"] * delta > 0):   # same direction
             return True
     return False
 
@@ -155,7 +166,7 @@ def _drift_finding(cat, metric, cur_mean, cur_se, cur_n, prev_mean, prev_se,
                 "value": cur_mean, "margin": None, "delta": None,
                 "evidence": f"{metric}: establishing baseline"}
     delta = round(cur_mean - prev_mean, 3)
-    sig, margin = _significant(delta, cur_se, prev_se, sigma_k)
+    sig, margin = _significant(delta, cur_se, prev_se, sigma_k, ref_mean=prev_mean)
     if not sig:
         return {"cat": cat, "metric": metric, "severity": "nominal",
                 "value": cur_mean, "margin": margin, "delta": delta,

@@ -130,3 +130,52 @@ def test_assess_attribution_drop():
     f = _facts({}, system={"attribution_pct": 40.0, "prev_attribution_pct": 70.0})
     attr = [x for x in weekly.assess(f) if x["metric"] == "attribution"][0]
     assert attr["severity"] == "watch" and attr["delta"] == -30.0
+
+
+def test_assess_weight_drift_watch():
+    f = _facts({"Ucok": _cat(voids=20, gap_mean=3.0, gap_se=0.2, gap_n=19,
+                             prev_gap_mean=3.0, prev_gap_se=0.2, prev_gap_n=18,
+                             weight_mean=60.0, weight_se=1.0, weight_n=19,
+                             prev_weight_mean=50.0, prev_weight_se=1.0,
+                             prev_weight_n=18)})
+    w = [x for x in weekly.assess(f) if x["cat"] == "Ucok" and x["metric"] == "weight"][0]
+    assert w["severity"] == "watch" and w["delta"] == 10.0
+
+
+def test_assess_weight_nominal_no_prev():
+    f = _facts({"Ucok": _cat(voids=20, gap_mean=3.0, gap_se=0.2, gap_n=19,
+                             prev_gap_mean=3.0, prev_gap_se=0.2, prev_gap_n=18,
+                             weight_mean=60.0, weight_se=1.0, weight_n=19,
+                             prev_weight_mean=None, prev_weight_se=0.0,
+                             prev_weight_n=0)})
+    w = [x for x in weekly.assess(f) if x["cat"] == "Ucok" and x["metric"] == "weight"][0]
+    assert w["severity"] == "nominal"   # no prev weight -> establishing baseline
+
+
+def test_assess_zero_variance_floor_rounding_ignored():
+    # se=0 both sides; tiny change vs prev mean 3.0 -> below 25% floor -> nominal
+    f = _facts({"Ucok": _cat(voids=20, gap_mean=3.0001, gap_se=0.0, gap_n=19,
+                             prev_gap_mean=3.0, prev_gap_se=0.0, prev_gap_n=18)})
+    freq = [x for x in weekly.assess(f) if x["cat"] == "Ucok" and x["metric"] == "frequency"][0]
+    assert freq["severity"] == "nominal"
+
+
+def test_assess_zero_variance_floor_real_change():
+    # se=0 both sides; doubling (3.0 -> 6.0) exceeds 25% of 3.0 floor -> watch
+    f = _facts({"Ucok": _cat(voids=20, gap_mean=6.0, gap_se=0.0, gap_n=19,
+                             prev_gap_mean=3.0, prev_gap_se=0.0, prev_gap_n=18)})
+    freq = [x for x in weekly.assess(f) if x["cat"] == "Ucok" and x["metric"] == "frequency"][0]
+    assert freq["severity"] == "watch" and freq["delta"] == 3.0
+
+
+def test_assess_attribution_nominal_no_prev():
+    f = _facts({}, system={"attribution_pct": 80.0, "prev_attribution_pct": None})
+    attr = [x for x in weekly.assess(f) if x["metric"] == "attribution"][0]
+    assert attr["severity"] == "nominal"
+
+
+def test_assess_attribution_nominal_small_drop():
+    # 70 -> 65 is a 5pp drop, below the 15pp threshold -> nominal
+    f = _facts({}, system={"attribution_pct": 65.0, "prev_attribution_pct": 70.0})
+    attr = [x for x in weekly.assess(f) if x["metric"] == "attribution"][0]
+    assert attr["severity"] == "nominal"
