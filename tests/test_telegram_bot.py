@@ -103,3 +103,15 @@ def test_callback_skip_does_not_label():
         "message": {"message_id": 9, "chat": {"id": 100}}, "data": "lbl:54:skip"}}
     bot.process([upd])
     assert labeled == []                     # skip is a no-op label-wise
+
+
+def test_dispatch_passes_arg_to_handler_that_accepts_one():
+    from mw.telegram_bot import TelegramBot
+    seen = []
+    bot = TelegramBot("tok", "123", {
+        "/feed": lambda arg="": seen.append(arg) or f"fed {arg}",
+        "/cats": lambda: "cats",                  # zero-arg still works
+    })
+    assert bot._dispatch("/feed 3") == "fed 3"
+    assert seen == ["3"]
+    assert bot._dispatch("/cats") == "cats"        # unchanged contract
