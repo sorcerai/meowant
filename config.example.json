@@ -15,5 +15,13 @@
   },
   "cameras": [
     {"name": "litter", "url": "rtsp://USER:PASS@192.168.1.X:554/Streaming/Channels/102"}
-  ]
+  ],
+  "deadman": {
+    "no_go_hours": 12,
+    "per_cat_enabled": false,
+    "per_cat_hours": 24,
+    "liveness_stale_s": 180,
+    "realarm_hours": 3,
+    "state_path": "deadman_state.json"
+  }
 }
