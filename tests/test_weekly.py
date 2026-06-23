@@ -247,3 +247,35 @@ def test_weekly_analyst_stamps_even_if_notify_fails(tmp_path):
     assert a.run_once(now) is True
     assert a._load_state().get("last_run") == now      # week still recorded (pull-recoverable)
     assert store.latest_weekly_report(conn) is not None
+
+
+def test_weekly_analyst_same_period_prior_not_persistence_evidence(tmp_path):
+    """Crash-rerun guard: a prior report for the SAME window (left behind by a
+    crash between persist and stamp) must NOT escalate this week's own `watch`
+    to `drift` via _persists — that would emit a false 🚨."""
+    import json
+    conn = _conn()
+    now = datetime(2026, 6, 23, 12, 0, 0).timestamp()
+    h = 3600.0
+    # This week: 6 voids ~6h apart (gap mean ≈ 6h). Prior week: 6 voids ~3h apart
+    # (gap mean ≈ 3h). The 3h→6h jump is a significant frequency delta -> `watch`.
+    for k in range(6):
+        _add_void(conn, "Ucok", now - (36 - 6 * k) * h, 55, 50)         # this week
+    for k in range(6):
+        _add_void(conn, "Ucok", now - (7 * 24 + 18 - 3 * k) * h, 55, 50)  # prior week
+    period_start = store._iso(now - weekly.WEEK_S)
+    # Pre-insert a report for the SAME current window with a same-sign frequency
+    # watch — exactly what a crash-before-stamp rerun would find as `prev`.
+    store.log_weekly_report(
+        conn, period_start, store._iso(now), "{}",
+        json.dumps([{"cat": "Ucok", "metric": "frequency",
+                     "severity": "watch", "delta": 3.0}]),
+        None, ts=now - 60)
+    sp = str(tmp_path / "wk.json")
+    a = weekly.WeeklyAnalyst(conn, lambda m: True,
+                             now_fn=lambda: now, state_path=sp)
+    assert a.run_once(now) is True
+    rep = store.latest_weekly_report(conn)             # the report run_once just wrote
+    findings = json.loads(rep["findings_json"])
+    freq = [x for x in findings if x["cat"] == "Ucok" and x["metric"] == "frequency"][0]
+    assert freq["severity"] == "watch"                 # NOT escalated to drift

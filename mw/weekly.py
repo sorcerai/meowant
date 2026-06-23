@@ -109,6 +109,8 @@ def collect_facts(conn, now, *, cats=CATS):
             "per_day": round(cur["voids"] / 7.0, 2),
             "gap_h": gs,
             "weight": {"mean": ws["mean"], "se": ws["se"], "n": ws["n"]},
+            # circadian + gap min/max are collected for Phase 2 (LLM hypotheses);
+            # Phase 1 assess() doesn't consume them — not dead code.
             "circadian": _circadian(cur["epochs"]),
             "prev": {"voids": prev["voids"],
                      "gap_mean_h": pgs["mean"], "gap_se": pgs["se"], "gap_n": pgs["n"],
@@ -250,6 +252,11 @@ class WeeklyAnalyst:
             return False
         facts = collect_facts(self.conn, now, cats=self.cats)
         prev = store.latest_weekly_report(self.conn)
+        # A report for the SAME window (e.g. a crash between persist and stamp caused
+        # a rerun) must NOT serve as persistence evidence — else this week's own
+        # `watch` would escalate itself to `drift` and emit a false alert.
+        if prev and prev.get("period_start") == facts["period"]["start"]:
+            prev = None
         prev_findings = json.loads(prev["findings_json"]) if (prev and prev["findings_json"]) else ()
         findings = assess(facts, prev_findings, min_void_n=self.min_void_n)
         text = facts_only_text(facts, findings)
