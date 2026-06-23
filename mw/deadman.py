@@ -16,6 +16,15 @@ def _hhmm_to_min(s):
     return int(h) * 60 + int(m)
 
 
+def _http_probe(url="http://localhost:8765/state", timeout=5):
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
 class DeadManSwitch:
     def __init__(self, conn, notify, now_fn=time.time, no_go_hours=12,
                  quiet_start="22:00", quiet_end="08:00", per_cat_enabled=False,
@@ -52,4 +61,16 @@ class DeadManSwitch:
             since = ts[5:16].replace("T", " ")
             return (f"🚨 DEAD-MAN: no litter box use in {hours:.0f}h (since {since}) "
                     f"— check on the cats")
+        return None
+
+    def check_liveness(self):
+        probe = self.state_probe or _http_probe
+        st = probe()
+        if st is None:
+            return "🚨 DEAD-MAN: meowant daemon unreachable (:8765 down) — monitoring is OFF"
+        last_ok = st.get("last_ok_ts")
+        if last_ok is None or (self.now() - last_ok) > self.liveness_stale_s:
+            age = "unknown" if last_ok is None else f"{(self.now()-last_ok)/60:.0f}min"
+            return (f"🚨 DEAD-MAN: daemon wedged — no device poll in {age} "
+                    f"— monitoring may be stalled")
         return None

@@ -53,3 +53,25 @@ def test_no_go_none_on_empty_db(tmp_path):
     conn = _db(tmp_path)
     base = time.mktime(time.strptime("2026-06-22 14:00", "%Y-%m-%d %H:%M"))
     assert _sw(conn, base).check_no_go() is None       # no data -> no alarm
+
+
+def test_liveness_fires_when_unreachable(tmp_path):
+    conn = _db(tmp_path)
+    sw = _sw(conn, 10_000.0, state_probe=lambda: None)     # daemon down
+    assert "daemon" in sw.check_liveness().lower()
+
+
+def test_liveness_fires_when_wedged(tmp_path):
+    conn = _db(tmp_path)
+    now = 10_000.0
+    sw = _sw(conn, now, liveness_stale_s=180,
+             state_probe=lambda: {"last_ok_ts": now - 600})  # last poll 10min ago
+    assert sw.check_liveness() is not None
+
+
+def test_liveness_ok_when_fresh(tmp_path):
+    conn = _db(tmp_path)
+    now = 10_000.0
+    sw = _sw(conn, now, liveness_stale_s=180,
+             state_probe=lambda: {"last_ok_ts": now - 5})    # polled 5s ago
+    assert sw.check_liveness() is None
