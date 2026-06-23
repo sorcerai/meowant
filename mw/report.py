@@ -111,10 +111,30 @@ def digest(conn, now=None):
     sess = store.sessions(conn)
     today_elim = [s for s in sess if s["eliminated"] and s["enter_ts"].startswith(today)]
     if not today_elim:
-        return f"✅ Meowant alive [{today}] — no box uses yet today."
+        base = f"✅ Meowant alive [{today}] — no box uses yet today."
+        return base + _feeds_suffix(conn, today)
     from collections import Counter
     by_cat = Counter((s["cat"] or "unattributed") for s in today_elim)
     last = max(s["enter_ts"] for s in today_elim)[11:16]
     parts = ", ".join(f"{c} {n}" for c, n in by_cat.most_common())
     return (f"✅ Meowant alive [{today}] — {len(today_elim)} box uses today "
-            f"(last {last}). {parts}")
+            f"(last {last}). {parts}" + _feeds_suffix(conn, today))
+
+
+def _feeds_suffix(conn, today):
+    meals, portions = store.feed_events_today(conn, today)
+    if not meals:
+        return ""
+    return f" 🍽️ {meals} feed(s)/{portions} portions."
+
+
+def feed_status_text(conn, status):
+    """Reply for /feedstatus from a FeederDevice.status() dict + last logged feed."""
+    if not status.get("online"):
+        return "🍽️ Feeder OFFLINE — unreachable on the LAN."
+    rows = store.recent_feed_events(conn, limit=1)
+    last = rows[0] if rows else None
+    last_txt = (f"last feed {last['ts'][5:16].replace('T', ' ')} "
+                f"({last['portions']}p, {last['source']})") if last else "no feeds logged"
+    return (f"🍽️ Feeder online — state {status.get('feed_state')}, "
+            f"hopper {status.get('food_level')}; {last_txt}")

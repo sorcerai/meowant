@@ -11,6 +11,7 @@ Long-polls getUpdates in a daemon thread; replies via the Telegram Bot API.
 Outbound alerts (mw.alerts) use the same bot independently — getUpdates only
 consumes inbound command messages, sendMessage handles both.
 """
+import inspect
 import sys
 import time
 import urllib.parse
@@ -119,11 +120,15 @@ class TelegramBot:
         return f"Commands: {cmds}"
 
     def _dispatch(self, text):
-        cmd = text.split()[0].lower() if text.strip() else ""
-        cmd = cmd.split("@")[0]              # strip @botname suffix Telegram adds in groups
+        parts = text.split(maxsplit=1)
+        cmd = (parts[0].lower() if parts else "").split("@")[0]
+        arg = parts[1].strip() if len(parts) > 1 else ""
         fn = self.handlers.get(cmd)
         try:
-            return fn() if fn else self._help()
+            if not fn:
+                return self._help()
+            takes_arg = len(inspect.signature(fn).parameters) >= 1
+            return fn(arg) if takes_arg else fn()
         except Exception as e:               # a broken handler must not kill the bot
             print(f"[telegram] handler {cmd} error: {e}", file=sys.stderr)
             return f"⚠️ {cmd} failed: {e}"

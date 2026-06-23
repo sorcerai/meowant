@@ -80,3 +80,34 @@ def test_incidents_report_lists_recent_and_totals():
     assert "stream_down" in out and "labeler_stall" in out
     assert "still DOWN" in out
     assert "Totals" in out or "totals" in out
+
+
+def test_digest_includes_feeds_line(tmp_path):
+    from mw import store, report
+    from datetime import datetime
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    now = datetime.now().timestamp()
+    store.log_feed_event(conn, 2, "scheduled", ts=now - 100)
+    out = report.digest(conn)
+    assert "feed" in out.lower()                       # mentions feeding
+    assert "2 portion" in out or "2 meal" in out or "1 feed" in out
+
+
+def test_feed_status_text(tmp_path):
+    from mw import store, report
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.log_feed_event(conn, 1, "manual", ts=1_000_000.0)
+    status = {"online": True, "feed_state": "standby", "food_level": "full",
+              "last_feed": {"ts": 1_000_000.0, "portions": 1}}
+    txt = report.feed_status_text(conn, status)
+    assert "full" in txt.lower() and ("online" in txt.lower() or "ok" in txt.lower())
+
+
+def test_feed_status_text_offline(tmp_path):
+    from mw import store, report
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    txt = report.feed_status_text(conn, {"online": False})
+    assert "offline" in txt.lower() or "unreachable" in txt.lower()

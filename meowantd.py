@@ -183,6 +183,21 @@ def main():
         threading.Thread(target=hb.run, daemon=True).start()
         print("heartbeat: external dead-man's-switch ping")
 
+    # Feeder (Phase 1): local Tuya control + dispense logging + watchdogs.
+    feeder_monitor = None
+    if config.get(cfg, "feeder.enabled", False) and config.get(cfg, "feeder.device_id"):
+        from mw.feeder import FeederDevice, FeederMonitor
+        feeder_dev = FeederDevice(config.get(cfg, "feeder"))
+        feeder_monitor = FeederMonitor(
+            feeder_dev, conn, make_notify(lambda k: config.get(cfg, k)),
+            mealtimes=config.get(cfg, "feeder.mealtimes", []),
+            poll_interval_s=config.get(cfg, "feeder.poll_interval_s", 120),
+            miss_grace_minutes=config.get(cfg, "feeder.miss_grace_minutes", 30),
+            offline_minutes=config.get(cfg, "feeder.offline_minutes", 30),
+            low_food_levels=config.get(cfg, "feeder.low_food_levels", ["empty", "low"]))
+        threading.Thread(target=feeder_monitor.run, daemon=True).start()
+        print("feeder: local control + dispense logging + watchdogs")
+
     # Inbound Telegram commands (/cats /status /health) — allowlisted to the owner
     # chat. Only starts if Telegram creds are configured.
     tg_token = config.get(cfg, "alerts.telegram_bot_token")
@@ -199,12 +214,25 @@ def main():
             if cid and store.human_attribute_visit(conn, vid, cid):
                 return f"✓ Visit {vid} labeled {cat}"
             return f"⚠️ Couldn't label visit {vid} as {cat}"
+        def _do_feed(dev, monitor, arg):
+            try:
+                n = int(arg) if arg.strip() else 1
+            except ValueError:
+                return "Usage: /feed <portions 1-50>"
+            n = max(1, min(50, n))
+            if dev.feed(n):
+                monitor.note_manual_feed()       # so the poll labels it 'manual'
+                return f"🍽️ Dispensed {n} portion(s)."
+            return "⚠️ Feed command failed (feeder unreachable?)."
         bot = TelegramBot(tg_token, tg_chat, {
+            **({"/feed": (lambda arg="": _do_feed(feeder_dev, feeder_monitor, arg)),
+                "/feedstatus": (lambda: report.feed_status_text(conn, feeder_dev.status()))}
+               if feeder_monitor else {}),
             "/cats": lambda: report.cat_report(conn),
             "/status": lambda: report.status_report(conn, daemon.state),
             "/health": lambda: report.health_report(conn),
             "/incidents": lambda: report.incidents_report(conn),
-            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents",
+            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents /feed /feedstatus",
         }, label_cb=_label_cb)
         threading.Thread(target=bot.run, daemon=True).start()
         print("telegram-bot: inbound commands (/cats /status /health /incidents), owner-allowlisted")

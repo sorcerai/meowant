@@ -274,3 +274,37 @@ def test_elimination_attribution_stats_respects_window_bounds(tmp_path):
     raw, attributed = store.elimination_attribution_stats(conn, after, before)
     assert raw == 1
     assert attributed == 0
+
+
+def test_feed_events_log_and_query(tmp_path):
+    from mw import store
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    T = 1_000_000.0
+    store.log_feed_event(conn, 2, "scheduled", ts=T)
+    store.log_feed_event(conn, 1, "manual", ts=T + 3600)
+    assert abs(store.last_feed_event_ts(conn) - (T + 3600)) < 1
+    assert store.feed_in_window(conn, T - 10, T + 10) is True
+    assert store.feed_in_window(conn, T + 100, T + 200) is False
+    rows = store.recent_feed_events(conn)
+    assert len(rows) == 2 and rows[0]["source"] == "manual"
+
+
+def test_feed_events_today_aggregates(tmp_path):
+    from mw import store
+    from datetime import date, datetime
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    # two feeds "today" (use now so the local-day filter matches), one portions 2 + one 1
+    now = datetime.now().timestamp()
+    store.log_feed_event(conn, 2, "scheduled", ts=now - 100)
+    store.log_feed_event(conn, 1, "manual", ts=now - 50)
+    meals, portions = store.feed_events_today(conn)
+    assert meals == 2 and portions == 3
+
+
+def test_last_feed_event_ts_empty_is_none(tmp_path):
+    from mw import store
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    assert store.last_feed_event_ts(conn) is None
