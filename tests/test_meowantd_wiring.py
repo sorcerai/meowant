@@ -29,6 +29,14 @@ def test_feeder_is_wired():
     assert "/feed" in src and "/feedstatus" in src
 
 
+def test_bowl_watch_is_wired():
+    import inspect, meowantd
+    src = inspect.getsource(meowantd)
+    assert "BowlWatch(" in src
+    assert "bowl.enabled" in src
+    assert "/bowl" in src
+
+
 def test_on_capture_writes_row_for_open_visit(tmp_path):
     conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
     vid = store.open_visit(conn, 1000.0)

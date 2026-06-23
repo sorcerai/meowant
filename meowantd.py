@@ -185,6 +185,7 @@ def main():
 
     # Feeder (Phase 1): local Tuya control + dispense logging + watchdogs.
     feeder_monitor = None
+    feeder_dev = None
     if config.get(cfg, "feeder.enabled", False) and config.get(cfg, "feeder.device_id"):
         from mw.feeder import FeederDevice, FeederMonitor
         feeder_dev = FeederDevice(config.get(cfg, "feeder"))
@@ -197,6 +198,39 @@ def main():
             low_food_levels=config.get(cfg, "feeder.low_food_levels", ["empty", "low"]))
         threading.Thread(target=feeder_monitor.run, daemon=True).start()
         print("feeder: local control + dispense logging + watchdogs")
+
+    # Bowl camera (Phase 2): full/empty vision -> refill alert / auto-feed.
+    # Dormant until bowl.enabled + a meowcam5 + a calibrated empty_ref on disk.
+    cams = config.get(cfg, "cameras", [])
+    m5 = next((c for c in cams if c["name"] == "meowcam5"), None)
+    bowl_ref = config.get(cfg, "bowl.empty_ref_path", "")
+    if config.get(cfg, "bowl.enabled", False) and m5 and bowl_ref and os.path.exists(bowl_ref):
+        from mw.bowl_watch import BowlWatch
+        from mw.bowl import DEFAULT_ROI
+        from mw.capture import ffmpeg_grab
+        os.makedirs("gallery/bowl", exist_ok=True)
+
+        def _bowl_grab(url=m5["url"]):
+            try:
+                return ffmpeg_grab(url, "gallery/bowl/latest.jpg")
+            except Exception:
+                return None
+
+        auto = config.get(cfg, "bowl.auto_feed", False)
+        bw = BowlWatch(
+            _bowl_grab, catfilter, conn,
+            make_notify(lambda k: config.get(cfg, k)),
+            feeder=(feeder_dev if auto and feeder_monitor is not None else None),
+            empty_ref=bowl_ref,
+            roi=tuple(config.get(cfg, "bowl.roi", list(DEFAULT_ROI))),
+            empty_max=config.get(cfg, "bowl.empty_max", 5.0),
+            full_min=config.get(cfg, "bowl.full_min", 20.0),
+            poll_interval_s=config.get(cfg, "bowl.poll_interval_s", 1200),
+            auto_feed=auto,
+            auto_feed_portions=config.get(cfg, "bowl.auto_feed_portions", 1),
+            auto_feed_max_per_day=config.get(cfg, "bowl.auto_feed_max_per_day", 4))
+        threading.Thread(target=bw.run, daemon=True).start()
+        print("bowl-watch: full/empty vision + refill/auto-feed")
 
     # Inbound Telegram commands (/cats /status /health) — allowlisted to the owner
     # chat. Only starts if Telegram creds are configured.
@@ -232,7 +266,8 @@ def main():
             "/status": lambda: report.status_report(conn, daemon.state),
             "/health": lambda: report.health_report(conn),
             "/incidents": lambda: report.incidents_report(conn),
-            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents /feed /feedstatus",
+            "/bowl": lambda: report.bowl_status_text(conn),
+            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents /feed /feedstatus /bowl",
         }, label_cb=_label_cb)
         threading.Thread(target=bot.run, daemon=True).start()
         print("telegram-bot: inbound commands (/cats /status /health /incidents), owner-allowlisted")
