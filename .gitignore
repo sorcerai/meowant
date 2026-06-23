@@ -42,3 +42,5 @@ meowantd.log
 
 # local-only non-technical explainer (kept out of the repo)
 docs/explainer/
+deadman_state.json
+deadman.log

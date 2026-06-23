@@ -28,22 +28,29 @@ def macos_notify(msg):
             check=False)
     else:
         print(f"[alert] {msg}")
+    return True
 
 
 def ntfy_notify(msg, topic, server="https://ntfy.sh"):
-    """Push to a phone via ntfy. Subscribe to <topic> in the ntfy app to receive."""
+    """Push to a phone via ntfy. Subscribe to <topic> in the ntfy app to receive.
+    Returns True on confirmed delivery, False on failure (so the dead-man's switch
+    can refrain from latching an alert it never actually sent)."""
     try:
         req = urllib.request.Request(
             f"{server}/{topic}", data=msg.encode("utf-8"), method="POST",
             headers={"Title": "Meowant SC10", "Tags": "cat"})
         urllib.request.urlopen(req, timeout=5)
+        return True
     except Exception as e:
         print(f"[alert] ntfy failed ({e}); msg: {msg}")
+        return False
 
 
 def telegram_notify(msg, token, chat_id):
     """Push via the Telegram Bot API. Messages carry an absolute send time in the
-    client, so (unlike ntfy) the 'when' never collapses to a vague 'yesterday'."""
+    client, so (unlike ntfy) the 'when' never collapses to a vague 'yesterday'.
+    Returns True on confirmed delivery, False on failure (so the dead-man's switch
+    can refrain from latching an alert it never actually sent)."""
     try:
         data = urllib.parse.urlencode(
             {"chat_id": chat_id, "text": msg}).encode("utf-8")
@@ -51,8 +58,10 @@ def telegram_notify(msg, token, chat_id):
             f"https://api.telegram.org/bot{token}/sendMessage",
             data=data, method="POST")
         urllib.request.urlopen(req, timeout=5)
+        return True
     except Exception as e:
         print(f"[alert] telegram failed ({e}); msg: {msg}")
+        return False
 
 
 def make_notify(cfg_get):
