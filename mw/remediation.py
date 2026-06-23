@@ -26,12 +26,16 @@ import time
 from mw import store
 
 
-def stream_down_playbook(cam_name, reprobe, sleep=time.sleep, wait_s=5):
+def stream_down_playbook(cam_name, reprobe, sleep=None, wait_s=5):
     """Debounce a flaky on-demand stream: wait `wait_s`, re-probe, and escalate
     only if it is STILL down. cryze/MediaMTX sources are on-demand and blip
     routinely; a single missed probe should not page the owner. meowantd cannot
-    repair an external stream, so a confirmed-down stream always escalates."""
-    sleep(wait_s)
+    repair an external stream, so a confirmed-down stream always escalates.
+
+    `sleep` defaults to None and is resolved to `time.sleep` at call time (not
+    def time) so a module-level `mw.remediation.time.sleep` monkeypatch in tests
+    is honored; tests may also inject `sleep=` directly."""
+    (sleep if sleep is not None else time.sleep)(wait_s)
     if reprobe():
         return {"action": f"re-probed '{cam_name}' after {wait_s}s: UP (transient)",
                 "resolved": True, "escalate": ""}
