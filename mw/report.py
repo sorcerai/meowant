@@ -88,6 +88,21 @@ def status_report(conn, state):
     return "\n".join(parts)
 
 
+def incidents_report(conn, limit=10):
+    """Recent watchdog incidents + per-(kind,outcome) totals — the /incidents view."""
+    rows = store.recent_incidents(conn, limit)
+    if not rows:
+        return "🩹 No incidents logged — watchdogs quiet."
+    lines = ["🩹 Recent incidents:"]
+    for r in rows:
+        when = r["ts"][5:16].replace("T", " ")
+        lines.append(f"  [{when}] {r['kind']} → {r['outcome']}: {r['action_taken']}")
+    lines.append("\nTotals:")
+    for r in store.incident_rollup(conn):
+        lines.append(f"  {r['kind']}/{r['outcome']}: {r['n']}")
+    return "\n".join(lines)
+
+
 def digest(conn, now=None):
     """One-line-ish 'alive + today' summary for the daily heartbeat digest."""
     from datetime import date, datetime

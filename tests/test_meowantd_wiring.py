@@ -4,6 +4,15 @@ from mw.bus import EventBus
 from mw.events import Event, CAT_ENTER
 from mw.capture import CaptureService
 
+def test_remediator_is_wired_into_capture_health():
+    import inspect
+    import meowantd
+    src = inspect.getsource(meowantd)
+    assert "Remediator(" in src                         # remediator constructed
+    assert "remediator=remediator" in src               # passed to CaptureHealth
+    assert "/incidents" in src                          # command registered
+
+
 def test_on_capture_writes_row_for_open_visit(tmp_path):
     conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
     vid = store.open_visit(conn, 1000.0)
