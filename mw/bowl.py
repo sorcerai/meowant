@@ -7,7 +7,6 @@ and matched lighting cancel; calibrate empty_max / full_min / roi at build
 against real empty/some/full frames.
 """
 import cv2
-import numpy as np
 
 FULL, SOME, EMPTY = "full", "some", "empty"
 DEFAULT_ROI = (0.30, 0.30, 0.70, 0.70)   # placeholder — calibrate to the bowl

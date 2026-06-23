@@ -66,6 +66,15 @@ class BowlWatch:
         self._empty_streak = 0
         self._empty_alerted = False
 
+    def _record_has_food(self, state):
+        """Re-arm and persist a vision row on a state CHANGE so /bowl + the digest
+        reflect the current bowl state. Logs only on change (not every poll)."""
+        self._empty_streak = 0
+        self._empty_alerted = False
+        if state != self._prev_state:
+            store.log_bowl_event(self.conn, state, "vision", ts=self.now())
+            self._prev_state = state
+
     def poll_once(self):
         path = self.grab()
         if not path:
@@ -77,17 +86,13 @@ class BowlWatch:
         if state is None:
             return                       # unreadable -> skip
         if state != bowl.EMPTY:
-            self._empty_streak = 0
-            self._empty_alerted = False  # has food -> re-arm
-            self._prev_state = state
+            self._record_has_food(state)
             return
         conf = self.confirm_empty(path)
         if conf is None:
             return                       # agy inconclusive -> skip
         if not conf:                     # agy: actually has food -> not empty
-            self._empty_streak = 0
-            self._empty_alerted = False
-            self._prev_state = bowl.SOME
+            self._record_has_food(bowl.SOME)
             return
         self._empty_streak += 1
         if self._empty_streak >= 2:      # debounce: 2 consecutive confirmed-empty

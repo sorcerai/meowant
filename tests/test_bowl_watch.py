@@ -123,3 +123,25 @@ def test_failed_delivery_does_not_latch(tmp_path, monkeypatch):
     w.poll_once(); w.poll_once()                    # streak 2 -> tries to alert (fails)
     w.poll_once()                                   # still empty -> retries (not latched)
     assert len(sent) == 2
+
+
+def test_readout_reflects_current_state_not_stuck_empty(tmp_path, monkeypatch):
+    conn = _db(tmp_path)
+    w = _watch(tmp_path, conn, notify=lambda m: None, confirm_empty=lambda p: True)
+    seq = iter([bowl.FULL, bowl.EMPTY, bowl.EMPTY, bowl.FULL])
+    monkeypatch.setattr(bowl, "fullness", lambda *a, **k: next(seq))
+    w.poll_once()                       # full  -> logs 'full'
+    assert store.last_bowl_state(conn) == "full"
+    w.poll_once(); w.poll_once()        # empty x2 -> confirmed empty
+    assert store.last_bowl_state(conn) == "empty"
+    w.poll_once()                       # full again -> readout must follow, not stay 'empty'
+    assert store.last_bowl_state(conn) == "full"
+
+
+def test_non_empty_logged_only_on_change(tmp_path, monkeypatch):
+    conn = _db(tmp_path)
+    w = _watch(tmp_path, conn, notify=lambda m: None, confirm_empty=lambda p: True)
+    monkeypatch.setattr(bowl, "fullness", lambda *a, **k: bowl.FULL)
+    w.poll_once(); w.poll_once(); w.poll_once()    # 3 identical 'full' reads
+    rows = [r for r in store.recent_bowl_events(conn) if r["source"] == "vision"]
+    assert len(rows) == 1               # logged once (on change), not every poll
