@@ -84,11 +84,12 @@ def test_incidents_report_lists_recent_and_totals():
 
 def test_digest_includes_feeds_line(tmp_path):
     from mw import store, report
-    from datetime import datetime
+    from datetime import date, datetime, time
     conn = store.connect(str(tmp_path / "t.db"))
     store.init_db(conn)
-    now = datetime.now().timestamp()
-    store.log_feed_event(conn, 2, "scheduled", ts=now - 100)
+    # anchor to noon today so the offset can't cross midnight (today-filter is date-based)
+    noon = datetime.combine(date.today(), time(12, 0)).timestamp()
+    store.log_feed_event(conn, 2, "scheduled", ts=noon)
     out = report.digest(conn)
     assert "feed" in out.lower()                       # mentions feeding
     assert "2 portion" in out or "2 meal" in out or "1 feed" in out
