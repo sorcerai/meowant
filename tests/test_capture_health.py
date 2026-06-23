@@ -132,3 +132,63 @@ def test_no_cameras_no_probing(tmp_path):
                       probe=lambda url: probed.append(url) or True, now_fn=lambda: T)
     h.run_once()
     assert probed == []   # camera-absent install: capture-health is a no-op
+
+
+def test_labeler_stall_routes_through_remediator_when_present(tmp_path):
+    from mw.remediation import Remediator
+    conn = _db(tmp_path)
+    vid = store.open_visit(conn, T - 5000)
+    store.insert_capture(conn, T - 5000, vid, "c", "/g/x.jpg")   # old, untouched
+    msgs = []
+    rem = Remediator(conn, notify=msgs.append, now_fn=lambda: T)
+    h = CaptureHealth(conn, [{"name": "c", "url": "u"}], notify=lambda m: None,
+                      probe=lambda u: True, now_fn=lambda: T,
+                      labeler_settle_seconds=1800, remediator=rem)
+    h.check_labeler()
+    assert len(msgs) == 1 and "stall" in msgs[0].lower()
+    # the episode was recorded as an incident (not just an ephemeral notify)
+    rows = store.recent_incidents(conn)
+    assert rows and rows[0]["kind"] == "labeler_stall"
+    assert rows[0]["outcome"] == "escalated"
+
+
+def test_stream_down_debounces_transient_drop(tmp_path):
+    from mw.remediation import Remediator
+    conn = _db(tmp_path)
+    # probe sequence: up (seed), down (transition fires playbook), then re-probe up
+    states = iter([True, False, True])
+    msgs = []
+    rem = Remediator(conn, notify=msgs.append, now_fn=lambda: T)
+    # patch the debounce sleep to no-op for the test
+    import mw.remediation as R
+    h = CaptureHealth(conn, [{"name": "c", "url": "u"}], notify=msgs.append,
+                      probe=lambda u: next(states), now_fn=lambda: T, remediator=rem)
+    orig_sleep = R.time.sleep
+    R.time.sleep = lambda s: None
+    try:
+        h.check_streams()   # seed: up
+        h.check_streams()   # up -> down: playbook waits then re-probes -> UP -> silent
+    finally:
+        R.time.sleep = orig_sleep
+    assert msgs == []                                  # transient blip, no alarm
+    assert store.recent_incidents(conn)[0]["outcome"] == "recovered"
+
+
+def test_stream_down_escalates_when_persistent(tmp_path):
+    from mw.remediation import Remediator
+    conn = _db(tmp_path)
+    states = iter([True, False, False])                # down and stays down
+    msgs = []
+    rem = Remediator(conn, notify=msgs.append, now_fn=lambda: T)
+    import mw.remediation as R
+    h = CaptureHealth(conn, [{"name": "c", "url": "u"}], notify=msgs.append,
+                      probe=lambda u: next(states), now_fn=lambda: T, remediator=rem)
+    orig_sleep = R.time.sleep
+    R.time.sleep = lambda s: None
+    try:
+        h.check_streams()   # up
+        h.check_streams()   # up -> down, re-probe still down -> escalate
+    finally:
+        R.time.sleep = orig_sleep
+    assert len(msgs) == 1 and "DOWN" in msgs[0]
+    assert store.recent_incidents(conn)[0]["outcome"] == "escalated"

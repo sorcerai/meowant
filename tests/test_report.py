@@ -62,3 +62,21 @@ def test_digest_summarizes_today(tmp_path):
     store.set_visit_identity(conn, v, store.cat_id_by_name(conn, "Ucok"), 1.0)
     txt = report.digest(conn, now=now + 120)
     assert "Ucok" in txt and ("1" in txt)
+
+
+def test_incidents_report_empty():
+    conn = _db()
+    out = report.incidents_report(conn)
+    assert "no incident" in out.lower()
+
+
+def test_incidents_report_lists_recent_and_totals():
+    conn = _db()
+    store.log_incident(conn, "stream_down", {"camera": "meowcam3"},
+                       "re-probed after 5s: still DOWN", "escalated", ts=1_000_000.0)
+    store.log_incident(conn, "labeler_stall", {"stuck": 4},
+                       "checked `agy` on PATH: MISSING", "escalated", ts=1_000_100.0)
+    out = report.incidents_report(conn)
+    assert "stream_down" in out and "labeler_stall" in out
+    assert "still DOWN" in out
+    assert "Totals" in out or "totals" in out

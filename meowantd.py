@@ -72,11 +72,18 @@ def main():
         print(f"capture-service: {len(cams)} camera(s), parallel grab while present "
               f"(≤{cap.max_frames} rounds @ {cap.interval_s}s)")
 
-        # Make capture failures loud: probe the (flaky, on-demand) RTSP sources
-        # and flag eliminations that landed zero frames.
+        from mw.remediation import Remediator
+        remediator = Remediator(
+            conn, make_notify(lambda k: config.get(cfg, k)),
+            max_per_window=config.get(cfg, "remediation.max_per_window", 3),
+            window_s=config.get(cfg, "remediation.window_s", 3600))
+        # Make capture failures loud AND remediated: probe streams, guard missed
+        # captures, and route detections through the deterministic playbooks
+        # (debounce streams, diagnose labeler stalls) -> incidents table + escalate.
         health = CaptureHealth(conn, cams,
                                notify=make_notify(lambda k: config.get(cfg, k)),
-                               settle_seconds=config.get(cfg, "capture.settle_seconds", 120))
+                               settle_seconds=config.get(cfg, "capture.settle_seconds", 120),
+                               remediator=remediator)
         threading.Thread(
             target=health.run,
             kwargs={"interval": config.get(cfg, "capture.health_interval_s", 300)},
@@ -182,10 +189,11 @@ def main():
             "/cats": lambda: report.cat_report(conn),
             "/status": lambda: report.status_report(conn, daemon.state),
             "/health": lambda: report.health_report(conn),
-            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health",
+            "/incidents": lambda: report.incidents_report(conn),
+            "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents",
         }, label_cb=_label_cb)
         threading.Thread(target=bot.run, daemon=True).start()
-        print("telegram-bot: inbound commands (/cats /status /health), owner-allowlisted")
+        print("telegram-bot: inbound commands (/cats /status /health /incidents), owner-allowlisted")
         # Wire the photo-prompt into the notifier (only when both cameras AND Telegram are configured)
         if 'elim_notifier' in locals():
             elim_notifier.ask_who = lambda vid, paths, when, waste="": send_label_request(
