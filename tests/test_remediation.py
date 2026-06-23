@@ -2,6 +2,7 @@
 from mw import store
 from mw.remediation import Remediator
 from mw.remediation import labeler_stall_playbook
+from mw.remediation import stream_down_playbook
 
 T = 1_000_000.0
 
@@ -94,3 +95,25 @@ def test_labeler_playbook_agy_present_warns_against_restart():
     assert "3 frame" in res["escalate"]
     assert "restart" in res["escalate"].lower()        # explicitly NOT restarting
     assert "/usr/local/bin/agy" in res["action"]
+
+
+def test_stream_playbook_recovers_silently_when_reprobe_up():
+    res = stream_down_playbook("meowcam3", reprobe=lambda: True,
+                               sleep=lambda s: None)
+    assert res["resolved"] is True
+    assert res["escalate"] == ""
+    assert "UP" in res["action"]
+
+
+def test_stream_playbook_escalates_when_still_down():
+    res = stream_down_playbook("meowcam3", reprobe=lambda: False,
+                               sleep=lambda s: None)
+    assert res["resolved"] is False
+    assert "meowcam3" in res["escalate"] and "DOWN" in res["escalate"]
+
+
+def test_stream_playbook_waits_before_reprobing():
+    waited = []
+    stream_down_playbook("c", reprobe=lambda: True,
+                         sleep=lambda s: waited.append(s), wait_s=7)
+    assert waited == [7]                                # debounce delay honored

@@ -56,7 +56,13 @@ class CaptureHealth:
             ok = self.probe(cam["url"])
             prev = self._up.get(cam["name"])
             if prev is True and not ok:
-                self.notify(f"📷 Camera '{cam['name']}' stream DOWN — captures will be lost")
+                if self.remediator:
+                    self.remediator.handle(
+                        "stream_down", {"camera": cam["name"]},
+                        lambda c=cam: remediation.stream_down_playbook(
+                            c["name"], reprobe=lambda: self.probe(c["url"])))
+                else:
+                    self.notify(f"📷 Camera '{cam['name']}' stream DOWN — captures will be lost")
             elif prev is False and ok:
                 self.notify(f"📷 Camera '{cam['name']}' stream recovered")
             self._up[cam["name"]] = ok

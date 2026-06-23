@@ -26,6 +26,21 @@ import time
 from mw import store
 
 
+def stream_down_playbook(cam_name, reprobe, sleep=time.sleep, wait_s=5):
+    """Debounce a flaky on-demand stream: wait `wait_s`, re-probe, and escalate
+    only if it is STILL down. cryze/MediaMTX sources are on-demand and blip
+    routinely; a single missed probe should not page the owner. meowantd cannot
+    repair an external stream, so a confirmed-down stream always escalates."""
+    sleep(wait_s)
+    if reprobe():
+        return {"action": f"re-probed '{cam_name}' after {wait_s}s: UP (transient)",
+                "resolved": True, "escalate": ""}
+    return {"action": f"re-probed '{cam_name}' after {wait_s}s: still DOWN",
+            "resolved": False,
+            "escalate": (f"📷 Camera '{cam_name}' stream DOWN (confirmed after a "
+                         f"{wait_s}s re-probe) — captures will be lost")}
+
+
 def labeler_stall_playbook(stuck_count, which=shutil.which):
     """Diagnose a labeler stall and escalate with the root cause. NEVER restarts:
     the labeler is a thread inside meowantd, restart churn caused the 2026-06-22
