@@ -191,10 +191,14 @@ def test_facts_only_text_renders_cats_and_system():
                 "flicker_fragments": 8})
     findings = weekly.assess(f)
     txt = weekly.facts_only_text(f, findings)
-    assert "Ucok" in txt and "Ella" in txt
-    assert "🚨" in txt or "⚠️" in txt        # Ucok frequency watch
-    assert "❓" in txt                          # Ella insufficient_data
-    assert "insufficient" in txt.lower() and "N=3" in txt
+    lines = txt.split("\n")
+    ucok_line = next(l for l in lines if "Ucok" in l)
+    ella_line = next(l for l in lines if "Ella" in l)
+    # Ucok gap 3.0->6.0 is a significant delta -> frequency watch -> ⚠️ on its line
+    assert "⚠️" in ucok_line
+    # Ella has 3 voids (<5) -> insufficient_data banner on its line -> ❓
+    assert "❓" in ella_line
+    assert "insufficient" in ella_line.lower() and "N=3" in ella_line
     assert "75.0%" in txt                       # attribution line
     assert "8" in txt                           # flicker count
 
