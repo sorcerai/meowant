@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS captures(
   camera TEXT, path TEXT, label INTEGER REFERENCES cats(id),
   pred INTEGER, pred_conf REAL, is_ir INTEGER,
   label_source TEXT);   -- 'human' | 'auto' | 'corrected' (NULL = unlabeled)
+CREATE TABLE IF NOT EXISTS incidents(
+  id INTEGER PRIMARY KEY, ts TEXT, kind TEXT,
+  signal TEXT,            -- JSON: detection details
+  action_taken TEXT,      -- what the playbook attempted
+  outcome TEXT,           -- 'recovered' | 'escalated' | 'suppressed' | 'failed'
+  notes TEXT);
 """
 
 # Columns added after the initial schema shipped; applied idempotently on init.
@@ -106,6 +112,52 @@ def last_elimination_ts(conn):
             "SELECT enter_ts FROM visits WHERE eliminated=1 "
             "ORDER BY enter_ts DESC LIMIT 1").fetchone()
         return row["enter_ts"] if row else None
+
+
+def log_incident(conn, kind, signal, action_taken, outcome, notes="", ts=None):
+    """Append one watchdog episode to the incidents audit log. `signal` is any
+    JSON-serializable dict; `ts` is an epoch float (None -> wall-clock now)."""
+    stamp = _iso(ts) if ts is not None else datetime.now().isoformat(timespec="seconds")
+    with _lock:
+        conn.execute(
+            "INSERT INTO incidents(ts, kind, signal, action_taken, outcome, notes) "
+            "VALUES(?,?,?,?,?,?)",
+            (stamp, kind, json.dumps(signal), action_taken, outcome, notes))
+        conn.commit()
+
+
+def recent_incidents(conn, limit=20):
+    """Newest-first incidents, with `signal` parsed back to a dict."""
+    with _lock:
+        rows = conn.execute(
+            "SELECT * FROM incidents ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["signal"] = json.loads(d["signal"]) if d["signal"] else {}
+        out.append(d)
+    return out
+
+
+def incidents_since(conn, kind, after_iso, outcomes=None):
+    """Count incidents of `kind` at/after `after_iso`, optionally restricted to
+    a tuple of `outcomes` — the rate-limit primitive for the Remediator."""
+    q = "SELECT COUNT(*) AS n FROM incidents WHERE kind=? AND ts>=?"
+    params = [kind, after_iso]
+    if outcomes:
+        q += " AND outcome IN (%s)" % ",".join("?" * len(outcomes))
+        params.extend(outcomes)
+    with _lock:
+        return conn.execute(q, params).fetchone()["n"]
+
+
+def incident_rollup(conn):
+    """(kind, outcome) counts, busiest first — the 'how are things going' view."""
+    with _lock:
+        rows = conn.execute(
+            "SELECT kind, outcome, COUNT(*) AS n FROM incidents "
+            "GROUP BY kind, outcome ORDER BY n DESC").fetchall()
+        return [dict(r) for r in rows]
 
 
 def recent_visits(conn, limit=20):
