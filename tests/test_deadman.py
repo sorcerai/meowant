@@ -75,3 +75,21 @@ def test_liveness_ok_when_fresh(tmp_path):
     sw = _sw(conn, now, liveness_stale_s=180,
              state_probe=lambda: {"last_ok_ts": now - 5})    # polled 5s ago
     assert sw.check_liveness() is None
+
+
+def test_per_cat_off_by_default(tmp_path):
+    conn = _db(tmp_path)
+    base = time.mktime(time.strptime("2026-06-22 14:00", "%Y-%m-%d %H:%M"))
+    _elim(conn, base - 30 * 3600, cat="Ella")          # Ella silent 30h
+    _elim(conn, base - 1 * 3600, cat="Ucok")           # Ucok recent
+    assert _sw(conn, base).check_per_cat() == []        # disabled -> nothing
+
+
+def test_per_cat_fires_for_silent_cat(tmp_path):
+    conn = _db(tmp_path)
+    base = time.mktime(time.strptime("2026-06-22 14:00", "%Y-%m-%d %H:%M"))
+    _elim(conn, base - 30 * 3600, cat="Ella")          # Ella 30h ago
+    _elim(conn, base - 1 * 3600, cat="Ucok")           # Ucok 1h ago (system clearly working)
+    msgs = _sw(conn, base, per_cat_enabled=True, per_cat_hours=24).check_per_cat()
+    assert any("Ella" in m for m in msgs)
+    assert not any("Ucok" in m for m in msgs)

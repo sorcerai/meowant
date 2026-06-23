@@ -74,3 +74,26 @@ class DeadManSwitch:
             return (f"🚨 DEAD-MAN: daemon wedged — no device poll in {age} "
                     f"— monitoring may be stalled")
         return None
+
+    def check_per_cat(self):
+        if not self.per_cat_enabled:
+            return []
+        now = self.now()
+        latest = {}   # cat name -> most recent eliminated enter_ts (epoch)
+        for s in store.sessions(self.conn):
+            if not s["eliminated"] or not s["cat"]:
+                continue
+            t = datetime.fromisoformat(s["enter_ts"]).timestamp()
+            latest[s["cat"]] = max(latest.get(s["cat"], 0), t)
+        if not latest:
+            return []
+        most_recent_any = max(latest.values())
+        out = []
+        for cat, t in latest.items():
+            hours = (now - t) / 3600.0
+            # only flag if the SYSTEM is clearly working (someone went recently) but
+            # THIS cat is silent — avoids firing during a global quiet/outage period.
+            if hours >= self.per_cat_hours and (now - most_recent_any) / 3600.0 < self.per_cat_hours:
+                out.append(f"🚨 DEAD-MAN: {cat} hasn't used the box in {hours:.0f}h "
+                           f"(others have) — check on {cat}")
+        return out
