@@ -214,6 +214,67 @@ def assess(facts, prev_findings=(), *, min_void_n=5, sigma_k=2.0,
 SEV_EMOJI = {"nominal": "✅", "watch": "⚠️", "drift": "🚨", "insufficient_data": "❓"}
 
 
+class WeeklyAnalyst:
+    def __init__(self, conn, notify, now_fn=time.time, *,
+                 state_path="weekly_state.json", interval_days=7,
+                 min_void_n=5, cats=CATS):
+        self.conn = conn
+        self.notify = notify
+        self.now = now_fn
+        self.state_path = state_path
+        self.interval_s = interval_days * 24 * 3600
+        self.min_void_n = min_void_n
+        self.cats = cats
+
+    def _load_state(self):
+        try:
+            with open(self.state_path) as f:
+                s = json.load(f)
+            return s if isinstance(s, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_state(self, state):
+        try:
+            with open(self.state_path, "w") as f:
+                json.dump(state, f)
+        except Exception as e:
+            print(f"[weekly] state save failed: {e}", file=sys.stderr)
+
+    def due(self, now):
+        last = self._load_state().get("last_run")
+        return last is None or (now - last) >= self.interval_s
+
+    def run_once(self, now):
+        if not self.due(now):
+            return False
+        facts = collect_facts(self.conn, now, cats=self.cats)
+        prev = store.latest_weekly_report(self.conn)
+        prev_findings = json.loads(prev["findings_json"]) if (prev and prev["findings_json"]) else ()
+        findings = assess(facts, prev_findings, min_void_n=self.min_void_n)
+        text = facts_only_text(facts, findings)
+        store.log_weekly_report(
+            self.conn, facts["period"]["start"], facts["period"]["end"],
+            json.dumps(facts), json.dumps(findings), None, ts=now)
+        # Cadence advances regardless of delivery: the report is in the DB and
+        # /weekly can re-fetch it, so a transient notify failure must not re-run
+        # the week (which would double-persist) nor skip it.
+        state = self._load_state()
+        state["last_run"] = now
+        self._save_state(state)
+        if self.notify(text) is False:
+            print("[weekly] notify failed; report persisted, use /weekly", file=sys.stderr)
+        return True
+
+    def run(self):
+        while True:
+            try:
+                self.run_once(self.now())
+            except Exception as e:
+                print(f"[weekly] error: {e}", file=sys.stderr)
+            time.sleep(6 * 3600)     # coarse poll; due() enforces the weekly cadence
+
+
 def _cat_findings(findings, cat):
     return {f["metric"]: f for f in findings if f["cat"] == cat}
 

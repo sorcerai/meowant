@@ -209,3 +209,41 @@ def test_facts_only_text_attribution_flagged_on_drop():
                            "flicker_fragments": 2})
     txt = weekly.facts_only_text(f, weekly.assess(f))
     assert "⚠️" in txt and "unidentified" in txt.lower()
+
+
+def test_weekly_analyst_not_due_is_noop(tmp_path):
+    conn = _conn()
+    sp = str(tmp_path / "wk.json")
+    sent = []
+    a = weekly.WeeklyAnalyst(conn, lambda m: sent.append(m) or True,
+                             now_fn=lambda: 1000.0, state_path=sp)
+    a._save_state({"last_run": 1000.0})           # just ran
+    assert a.run_once(1000.0 + 3600) is False      # 1h later -> not due
+    assert sent == [] and store.latest_weekly_report(conn) is None
+
+
+def test_weekly_analyst_due_persists_and_notifies(tmp_path):
+    conn = _conn()
+    now = datetime(2026, 6, 23, 12, 0, 0).timestamp()
+    for k in range(6):                              # 6 Ucok voids this week
+        _add_void(conn, "Ucok", now - (20 - 2 * k) * 3600, 55, 50)
+    sp = str(tmp_path / "wk.json")
+    sent = []
+    a = weekly.WeeklyAnalyst(conn, lambda m: sent.append(m) or True,
+                             now_fn=lambda: now, state_path=sp)
+    assert a.run_once(now) is True                  # no prior state -> due
+    assert len(sent) == 1 and "Ucok" in sent[0]
+    rep = store.latest_weekly_report(conn)
+    assert rep is not None and rep["narrative_json"] is None
+    assert a._load_state().get("last_run") == now   # stamped
+
+
+def test_weekly_analyst_stamps_even_if_notify_fails(tmp_path):
+    conn = _conn()
+    now = datetime(2026, 6, 23, 12, 0, 0).timestamp()
+    sp = str(tmp_path / "wk.json")
+    a = weekly.WeeklyAnalyst(conn, lambda m: False,    # delivery fails
+                             now_fn=lambda: now, state_path=sp)
+    assert a.run_once(now) is True
+    assert a._load_state().get("last_run") == now      # week still recorded (pull-recoverable)
+    assert store.latest_weekly_report(conn) is not None
