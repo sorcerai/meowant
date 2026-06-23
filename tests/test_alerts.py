@@ -4,7 +4,7 @@ from mw.alerts import alert_message, Alerts, make_notify
 
 def test_alert_message_mapping():
     assert "bin" in alert_message(Event(BIN_FULL, 1.0)).lower()
-    assert alert_message(Event(ELIMINATION, 1.0, {})) is not None
+    assert alert_message(Event(ELIMINATION, 1.0, {})) is None  # named alert via EliminationNotifier
     assert "fault" in alert_message(Event(FAULT, 1.0, {"bitmap": 2})).lower()
     assert alert_message(Event(CAT_ENTER, 1.0)) is None  # not alert-worthy
 
