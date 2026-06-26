@@ -78,6 +78,10 @@ def test_apply_edits_thresholds_and_smartclean(tmp_path):
     {"thresholds": {"Ucok": -3}},
     {"feeders": [{"label": "downstairs", "mealtimes": ["08:00", "99:99"]}]},
     {"feeders": [{"label": "nonexistent", "mealtimes": ["08:00"]}]},
+    {"feeders": [{"label": "downstairs", "mealtimes": []}]},  # empty -> would zero all feedings
+    {"smartclean": {"max_wait_seconds": 1}},                  # unknown sub-key (clobber guard)
+    {"smartclean": {"idle_seconds": 300.5}},                  # float, not int
+    {},                                                       # empty edit -> needless restart
     {"device_id": "hacked"},          # secret / non-allowlisted key
     {"cameras": []},                  # non-allowlisted key
 ])

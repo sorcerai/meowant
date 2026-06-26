@@ -46,6 +46,8 @@ def read_safe(cfg):
 def _validate(edits, cfg):
     """Return a list of human-readable errors (empty == valid)."""
     errs = []
+    if not edits:
+        return ["no edits provided"]   # an empty save would needlessly restart the daemon
     bad_keys = set(edits) - ALLOWED_TOP
     if bad_keys:
         errs.append(f"not editable: {', '.join(sorted(bad_keys))}")
@@ -60,6 +62,9 @@ def _validate(edits, cfg):
         if not isinstance(sc, dict):
             errs.append("smartclean must be an object")
         else:
+            bad_sc = set(sc) - {"enabled", "idle_seconds"}
+            if bad_sc:   # don't let a crafted edit clobber max_wait_seconds etc.
+                errs.append(f"unknown smartclean keys: {', '.join(sorted(bad_sc))}")
             if "enabled" in sc and not isinstance(sc["enabled"], bool):
                 errs.append("smartclean.enabled must be true/false")
             if "idle_seconds" in sc:
@@ -87,8 +92,10 @@ def _validate(edits, cfg):
                     errs.append(f"unknown feeder '{label}'")
                     continue
                 mt = f.get("mealtimes")
-                if not isinstance(mt, list) or not all(_valid_hhmm(t) for t in mt):
-                    errs.append(f"feeder '{label}' mealtimes must be a list of HH:MM")
+                # `not mt` rejects [] — an empty list would silently zero all
+                # scheduled feedings (cats miss meals with no alarm).
+                if not isinstance(mt, list) or not mt or not all(_valid_hhmm(t) for t in mt):
+                    errs.append(f"feeder '{label}' mealtimes must be a non-empty list of HH:MM")
     return errs
 
 

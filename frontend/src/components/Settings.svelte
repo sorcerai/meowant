@@ -53,9 +53,9 @@
   function runValidation() {
     quietStartErr = isValidTime(quietStart) ? '' : 'Must be HH:MM (00:00–23:59)'
     quietEndErr = isValidTime(quietEnd) ? '' : 'Must be HH:MM (00:00–23:59)'
-    scIdleErr = Number.isFinite(scIdle) && scIdle >= 10 && scIdle <= 3600
+    scIdleErr = Number.isInteger(scIdle) && scIdle >= 10 && scIdle <= 3600
       ? ''
-      : 'Must be 10–3600 seconds'
+      : 'Must be a whole number, 10–3600 seconds'
 
     thresholdList = thresholdList.map(t => ({
       ...t,
@@ -67,7 +67,10 @@
     feederList = feederList.map(f => {
       const times = parseMealtimes(f.mealtimes)
       const bad = times.filter(t => !isValidTime(t))
-      return { ...f, err: bad.length ? `Invalid times: ${bad.join(', ')}` : '' }
+      let err = ''
+      if (times.length === 0) err = 'At least one mealtime required'
+      else if (bad.length) err = `Invalid times: ${bad.join(', ')}`
+      return { ...f, err }
     })
   }
 
@@ -137,6 +140,13 @@
         label: f.label,
         mealtimes: parseMealtimes(f.mealtimes),
       }))
+    }
+
+    // Nothing actually changed — don't POST (it would needlessly restart the daemon).
+    if (Object.keys(partial).length === 0) {
+      saving = false
+      onClose()
+      return
     }
 
     try {

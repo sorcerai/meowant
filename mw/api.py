@@ -66,7 +66,13 @@ def create_app(daemon, conn, bus=None, feeders=None, monitors=None,
             return jsonify({"ok": False, "error": str(e)}), 400
         except Exception as e:
             return jsonify({"ok": False, "error": f"write failed: {e}"}), 500
-        reload_fn()   # detached restart; response flushes before the process dies
+        # Write succeeded — the config IS saved. If the detached restart fails to
+        # launch, don't 500 a successful save; warn so the owner can restart.
+        try:
+            reload_fn()   # detached restart; response flushes before the process dies
+        except Exception as e:
+            return jsonify({"ok": True, "applied": applied,
+                            "warning": f"saved, but reload failed ({e}) — restart the daemon"})
         return jsonify({"ok": True, "applied": applied})
 
     @app.get("/")
