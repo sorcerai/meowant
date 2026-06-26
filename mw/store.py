@@ -206,8 +206,8 @@ def eliminations_today_for_cat(conn, cat_name, now=None):
         return conn.execute(
             "SELECT COUNT(*) AS n FROM visits v JOIN cats c ON c.id=v.cat_id "
             "WHERE v.eliminated=1 AND c.name=? "
-            "AND strftime('%s', v.enter_ts) >= ?",
-            (cat_name, str(int(midnight)))).fetchone()["n"]
+            "AND strftime('%s', v.enter_ts) >= strftime('%s', ?)",
+            (cat_name, _iso(midnight))).fetchone()["n"]
 
 
 def unattributed_eliminations_since(conn, after_iso):

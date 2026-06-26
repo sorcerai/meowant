@@ -43,3 +43,26 @@ def test_no_data_is_ok_not_alarm(tmp_path):
     assert rows["Ella"]["status"] == "ok"
     assert rows["Ella"]["last_litter_ts"] is None
     assert rows["Ella"]["hours_since"] is None
+
+def test_band_boundaries_are_inclusive(tmp_path):
+    # Pins the >= edges: exactly 0.75*threshold -> watch, exactly threshold -> alert.
+    conn = _db(tmp_path)
+    _elim(conn, "Ucok", T - 6.0 * 3600)       # exactly 0.75*8 = 6.0h -> watch
+    rows = {r["name"]: r for r in cat_status.cat_status(conn, now_fn=lambda: T)}
+    assert rows["Ucok"]["status"] == "watch"
+
+    sub = tmp_path / "b"; sub.mkdir()
+    conn2 = _db(sub)
+    _elim(conn2, "Ucok", T - 8.0 * 3600)      # exactly threshold 8.0h -> alert
+    rows2 = {r["name"]: r for r in cat_status.cat_status(conn2, now_fn=lambda: T)}
+    assert rows2["Ucok"]["status"] == "alert"
+
+def test_today_count_is_tz_correct(tmp_path):
+    # Build timestamps from now's LOCAL midnight so the test is tz-agnostic.
+    conn = _db(tmp_path)
+    lt = time.localtime(T)
+    midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    _elim(conn, "Ucok", midnight + 3600)      # ~1h after midnight today -> counts
+    _elim(conn, "Ucok", midnight - 3600)      # ~1h before midnight (yesterday) -> not today
+    rows = {r["name"]: r for r in cat_status.cat_status(conn, now_fn=lambda: T)}
+    assert rows["Ucok"]["litter_count_today"] == 1
