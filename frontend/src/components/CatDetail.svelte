@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import type { CatDetailT } from '../lib/api'
   import { getCatDetail } from '../lib/api'
-  import { relativeTime } from '../lib/format'
+  import { relativeTime, deriveBadge } from '../lib/format'
 
   export let name: string
   export let onClose: () => void
@@ -11,17 +11,7 @@
   let loading = true
   let error = ''
 
-  const pill: Record<'ok' | 'watch' | 'alert', { label: string; bg: string; color: string }> = {
-    ok:    { label: '● OK',    bg: '#00b8a9', color: '#fff' },
-    watch: { label: '▲ WATCH', bg: '#ffd32a', color: '#111' },
-    alert: { label: '⚠ ALERT', bg: '#ff4757', color: '#fff' },
-  }
-
-  $: badge = data
-    ? data.attribution_uncertain
-      ? { label: "❓ CAN'T CONFIRM", bg: '#efe2b3', color: '#6b5d2f' }
-      : pill[data.status]
-    : null
+  $: badge = data ? deriveBadge(data.status, data.attribution_uncertain) : null
 
   onMount(async () => {
     try {

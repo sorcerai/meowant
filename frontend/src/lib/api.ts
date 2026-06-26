@@ -73,7 +73,7 @@ export function subscribeEvents(
   const es = new EventSource('/events')
   es.onopen = () => onOpen?.()
   es.onmessage = (m) => {
-    try { onEvent(JSON.parse(m.data)) } catch {}
+    try { onEvent(JSON.parse(m.data)) } catch (e) { console.warn('SSE parse error', e) }
   }
   es.onerror = () => onError?.()
   return () => es.close()

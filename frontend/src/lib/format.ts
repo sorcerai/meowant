@@ -1,3 +1,21 @@
+export type BadgeStyle = { label: string; bg: string; color: string }
+
+export const pillConfig: Record<'ok' | 'watch' | 'alert', BadgeStyle> = {
+  ok:    { label: '● OK',    bg: '#00b8a9', color: '#fff' },
+  watch: { label: '▲ WATCH', bg: '#ffd32a', color: '#111' },
+  alert: { label: '⚠ ALERT', bg: '#ff4757', color: '#fff' },
+}
+
+export function deriveBadge(
+  status: 'ok' | 'watch' | 'alert',
+  attribution_uncertain?: boolean,
+): BadgeStyle {
+  if (attribution_uncertain) {
+    return { label: "❓ CAN'T CONFIRM", bg: '#efe2b3', color: '#6b5d2f' }
+  }
+  return pillConfig[status]
+}
+
 export function relativeTime(iso: string | null): string {
   if (!iso) return '—'
   const t = new Date(iso).getTime()

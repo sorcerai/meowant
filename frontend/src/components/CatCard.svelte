@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Cat } from '../lib/api'
-  import { relativeTime, statusColor } from '../lib/format'
+  import { relativeTime, statusColor, deriveBadge } from '../lib/format'
 
   export let cat: Cat
   export let onOpen: () => void = () => {}
@@ -13,17 +13,9 @@
     })
   }
 
-  const pill: Record<'ok' | 'watch' | 'alert', { label: string; bg: string; color: string }> = {
-    ok:    { label: '● OK',    bg: '#00b8a9', color: '#fff' },
-    watch: { label: '▲ WATCH', bg: '#ffd32a', color: '#111' },
-    alert: { label: '⚠ ALERT', bg: '#ff4757', color: '#fff' },
-  }
-
   // When the box was used but the labeler couldn't confidently attribute it, the
   // per-cat "hasn't gone" reading is unreliable — show "can't confirm", not an alarm.
-  $: badge = cat.attribution_uncertain
-    ? { label: "❓ CAN'T CONFIRM", bg: '#efe2b3', color: '#6b5d2f' }
-    : pill[cat.status]
+  $: badge = deriveBadge(cat.status, cat.attribution_uncertain)
 </script>
 
 <!-- Memphis cat card: white bg, hard 2.5px border, shadow color by status -->
