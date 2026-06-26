@@ -122,6 +122,49 @@ def create_app(daemon, conn, bus=None):
             return jsonify({"ok": False, "error": f"unknown action {action}"}), 400
         return jsonify({"ok": True})
 
+    @app.get("/boxhealth")
+    def boxhealth():
+        full_since = store.bin_full_since(conn)
+        cap = store.bin_fill_capacity(conn)
+        last_clear = store.last_bin_clear_ts(conn)
+        cleans = store.cleans_since(conn, last_clear) if last_clear else None
+        left = max(0, cap - cleans) if (cap is not None and cleans is not None) else None
+        st = _decode_state(daemon.state)
+        return jsonify({
+            "bin_full_since": full_since,
+            "capacity": cap,
+            "cleans_since_empty": cleans,
+            "est_cleans_left": left,
+            "auto_clean": st["auto_clean"],
+            "faults": st["faults"],
+        })
+
+    @app.get("/bowls")
+    def bowls():
+        # TODO Phase 2: read locations from config
+        out = []
+        for loc in ("downstairs", "upstairs"):
+            out.append({
+                "location": loc,
+                "state": store.last_bowl_state(conn, location=loc),
+                "last_consumption_secs": store.last_consumption_secs(conn, location=loc),
+                "auto_feeds_today": store.auto_feeds_today(conn, location=loc),
+            })
+        return jsonify(out)
+
+    @app.get("/feeders")
+    def feeders():
+        # TODO Phase 2: read feeder labels from config
+        out = []
+        for label in ("downstairs", "upstairs"):
+            meals, _ = store.feed_events_today(conn, feeder=label)
+            out.append({
+                "label": label,
+                "last_feed_ts": store.last_feed_event_ts(conn, feeder=label),
+                "today_count": meals,
+            })
+        return jsonify(out)
+
     if bus is not None:
         @app.get("/events")
         def events_stream():

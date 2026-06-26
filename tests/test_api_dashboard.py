@@ -62,3 +62,21 @@ def test_cats_last_ate_picks_most_recent(tmp_path):
     garfield = next(c for c in data if c["name"] == "Garfield")
     assert garfield["last_ate"]["duration_s"] == 99
     assert garfield["last_ate"]["location"] == "kitchen"
+
+
+def test_boxhealth_endpoint(tmp_path):
+    client, conn = _app(tmp_path)
+    r = client.get("/boxhealth")
+    assert r.status_code == 200
+    d = r.get_json()
+    for k in ("bin_full_since", "capacity", "cleans_since_empty",
+              "est_cleans_left", "auto_clean", "faults"):
+        assert k in d
+
+
+def test_bowls_and_feeders_endpoints(tmp_path):
+    client, conn = _app(tmp_path)
+    assert client.get("/bowls").status_code == 200
+    assert isinstance(client.get("/bowls").get_json(), list)
+    assert client.get("/feeders").status_code == 200
+    assert isinstance(client.get("/feeders").get_json(), list)
