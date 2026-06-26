@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Run ONE dead-man's-switch pass and exit. Scheduled by launchd (StartInterval),
 independent of meowantd so it can't share its failure mode."""
-from mw import config, store
+from mw import cat_status, config, store
 from mw.alerts import make_notify
 from mw.deadman import DeadManSwitch
 
 
 def main():
     cfg = config.load("config.json")
+    # Apply config thresholds here too: this is a SEPARATE process from meowantd,
+    # so without this the deadman would use code-default thresholds while the main
+    # daemon uses config-edited ones — the two surfaces would diverge (29e).
+    cat_status.load_thresholds(cfg)
     g = lambda k, d=None: config.get(cfg, k, d)
     conn = store.connect(g("deadman.db_path", "meowant.db"))
     sw = DeadManSwitch(
