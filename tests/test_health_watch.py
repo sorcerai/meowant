@@ -109,17 +109,45 @@ def test_no_go_suppressed_when_unattributed_elims_present(tmp_path):
     store.seed_cats(conn, ["Ucok", "Ella", "Garfield"])
     now = 2_000_000.0
     # Ella attributed recently (keeps system-wide guard from firing);
-    # Ucok last attributed 10h ago (>8h -> would alarm); plus a recent UNATTRIBUTED elim.
+    # Ucok last attributed 10h ago (>8h -> would alarm); plus TWO recent UNATTRIBUTED
+    # elims (>=2 -> genuine backlog, hedge engages).
     def visit(enter, elim, cat=None):
         vid = store.open_visit(conn, enter); store.close_visit(conn, vid, enter + 60, 60)
         if elim: store.mark_elimination(conn, vid, 90)
         if cat: store.set_visit_identity(conn, vid, store.cat_id_by_name(conn, cat), 1.0)
     visit(now - 1 * 3600, True, cat="Ella")     # recent attributed -> guard stays quiet
     visit(now - 10 * 3600, True, cat="Ucok")    # Ucok 10h ago (>8h)
-    visit(now - 2 * 3600, True)                  # recent UNATTRIBUTED elim
+    visit(now - 2 * 3600, True)                  # recent UNATTRIBUTED elim #1
+    visit(now - 3 * 3600, True)                  # recent UNATTRIBUTED elim #2
     msgs = []
     hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: now)
     hw._check_no_go()
     # Must NOT fire a confident "Ucok ... No litter box use" alarm; instead one honest notice.
     assert not any("No litter box use" in m for m in msgs)
     assert any("attribution" in m.lower() for m in msgs)
+
+
+def test_no_go_hedge_not_engaged_at_single_unattributed(tmp_path):
+    """Boundary: a SINGLE unattributed elim (often one false-IR empty-box visit) must
+    NOT mute real per-cat sick-cat alarms. Hedge requires genuine backlog (>=2)."""
+    from mw import store
+    from mw.health_watch import HealthWatch
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella", "Garfield"])
+    now = 2_000_000.0
+    def visit(enter, elim, cat=None):
+        vid = store.open_visit(conn, enter); store.close_visit(conn, vid, enter + 60, 60)
+        if elim: store.mark_elimination(conn, vid, 90)
+        if cat: store.set_visit_identity(conn, vid, store.cat_id_by_name(conn, cat), 1.0)
+    # Ella went 25h ago (>24h -> would alarm); Garfield recent (keeps system guard quiet);
+    # exactly ONE unattributed elim -> hedge must stay disengaged.
+    visit(now - 25 * 3600, True, cat="Ella")    # Ella 25h ago (>24h limit)
+    visit(now - 1 * 3600, True, cat="Garfield") # recent attributed -> system guard quiet
+    visit(now - 2 * 3600, True)                  # single UNATTRIBUTED elim (count==1)
+    msgs = []
+    hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: now)
+    hw._check_no_go()
+    # Hedge NOT engaged: real per-cat alarm still fires, no attribution notice.
+    assert any("No litter box use" in m and "Ella" in m for m in msgs)
+    assert not any("attribution" in m.lower() for m in msgs)

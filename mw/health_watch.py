@@ -47,7 +47,7 @@ class HealthWatch:
         # be X). Suppress per-cat no-go and raise ONE honest notice instead.
         window_iso = store._iso(now - 24 * 3600)
         unattributed = store.unattributed_eliminations_since(self.conn, window_iso)
-        if unattributed >= 1:
+        if unattributed >= 2:
             if not self._alarmed.get("_attribution", False):
                 self.notify(f"⚠️ Attribution degraded — {unattributed} box use(s) in 24h "
                             f"couldn't be matched to a cat; per-cat no-go alarms paused. "
