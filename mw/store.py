@@ -149,7 +149,7 @@ def cleans_since(conn, after_iso):
     with _lock:
         return conn.execute(
             "SELECT COUNT(*) AS n FROM events WHERE kind='clean_done' "
-            "AND strftime('%s', ts) > strftime('%s', ?)",
+            "AND CAST(strftime('%s', ts) AS INTEGER) > CAST(strftime('%s', ?) AS INTEGER)",
             (after_iso,)).fetchone()["n"]
 
 
@@ -211,7 +211,7 @@ def last_real_elimination_ts_any(conn):
             "SELECT v.enter_ts FROM visits v JOIN cats c ON c.id=v.cat_id "
             "WHERE v.eliminated=1 "
             "AND NOT (c.name='Garfield' AND (v.use_record IS NULL OR v.duration_s <= 40)) "
-            "ORDER BY strftime('%s', v.enter_ts) DESC LIMIT 1").fetchone()
+            "ORDER BY CAST(strftime('%s', v.enter_ts) AS INTEGER) DESC LIMIT 1").fetchone()
         return row["enter_ts"] if row else None
 
 
@@ -225,7 +225,7 @@ def eliminations_today_for_cat(conn, cat_name, now=None):
         return conn.execute(
             "SELECT COUNT(*) AS n FROM visits v JOIN cats c ON c.id=v.cat_id "
             "WHERE v.eliminated=1 AND c.name=? "
-            "AND strftime('%s', v.enter_ts) >= strftime('%s', ?)",
+            "AND CAST(strftime('%s', v.enter_ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER)",
             (cat_name, _iso(midnight))).fetchone()["n"]
 
 
@@ -237,7 +237,7 @@ def unattributed_eliminations_since(conn, after_iso):
         return conn.execute(
             "SELECT COUNT(*) AS n FROM visits "
             "WHERE eliminated=1 AND cat_id IS NULL "
-            "AND strftime('%s', enter_ts) >= strftime('%s', ?)",
+            "AND CAST(strftime('%s', enter_ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER)",
             (after_iso,)).fetchone()["n"]
 
 
@@ -251,7 +251,7 @@ def uncertain_eliminations_since(conn, after_iso, conf_floor=0.7):
         return conn.execute(
             "SELECT COUNT(*) AS n FROM visits "
             "WHERE eliminated=1 AND (cat_id IS NULL OR confidence < ?) "
-            "AND strftime('%s', enter_ts) >= strftime('%s', ?)",
+            "AND CAST(strftime('%s', enter_ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER)",
             (conf_floor, after_iso)).fetchone()["n"]
 
 
@@ -290,7 +290,7 @@ def recent_incidents(conn, limit=20):
 def incidents_since(conn, kind, after_iso, outcomes=None):
     """Count incidents of `kind` at/after `after_iso`, optionally restricted to
     a tuple of `outcomes` — the rate-limit primitive for the Remediator."""
-    q = "SELECT COUNT(*) AS n FROM incidents WHERE kind=? AND ts>=?"
+    q = "SELECT COUNT(*) AS n FROM incidents WHERE kind=? AND CAST(strftime('%s', ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER)"
     params = [kind, after_iso]
     if outcomes:
         q += " AND outcome IN (%s)" % ",".join("?" * len(outcomes))
@@ -459,11 +459,13 @@ def feed_in_window(conn, start_epoch, end_epoch, feeder=None):
     with _lock:
         if feeder:
             row = conn.execute(
-                "SELECT 1 FROM feed_events WHERE ts>=? AND ts<=? AND feeder=? LIMIT 1",
+                "SELECT 1 FROM feed_events WHERE CAST(strftime('%s', ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER) "
+                "AND CAST(strftime('%s', ts) AS INTEGER) <= CAST(strftime('%s', ?) AS INTEGER) AND feeder=? LIMIT 1",
                 (_iso(start_epoch), _iso(end_epoch), feeder)).fetchone()
         else:
             row = conn.execute(
-                "SELECT 1 FROM feed_events WHERE ts>=? AND ts<=? LIMIT 1",
+                "SELECT 1 FROM feed_events WHERE CAST(strftime('%s', ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER) "
+                "AND CAST(strftime('%s', ts) AS INTEGER) <= CAST(strftime('%s', ?) AS INTEGER) LIMIT 1",
                 (_iso(start_epoch), _iso(end_epoch))).fetchone()
         return row is not None
 
@@ -574,7 +576,9 @@ def elimination_attribution_stats(conn, after_iso, before_iso):
             "  SUM(CASE WHEN (SELECT COUNT(*) FROM captures WHERE visit_id=visits.id) > 0 THEN 1 ELSE 0 END) AS framed_raw, "
             "  SUM(CASE WHEN (SELECT COUNT(*) FROM captures WHERE visit_id=visits.id) = 0 THEN 1 ELSE 0 END) AS frameless_raw, "
             "  SUM(CASE WHEN cat_id IS NOT NULL AND (SELECT COUNT(*) FROM captures WHERE visit_id=visits.id) > 0 THEN 1 ELSE 0 END) AS attributed "
-            "FROM visits WHERE eliminated=1 AND enter_ts>=? AND enter_ts<?",
+            "FROM visits WHERE eliminated=1 "
+            "AND CAST(strftime('%s', enter_ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER) "
+            "AND CAST(strftime('%s', enter_ts) AS INTEGER) < CAST(strftime('%s', ?) AS INTEGER)",
             (after_iso, before_iso)).fetchone()
         return (row["framed_raw"] or 0), (row["attributed"] or 0), (row["frameless_raw"] or 0)
 
@@ -649,7 +653,7 @@ def stale_unlabeled_count(conn, before_iso):
     with _lock:
         row = conn.execute(
             "SELECT COUNT(*) FROM captures WHERE label IS NULL AND label_source IS NULL "
-            "AND visit_id IS NOT NULL AND ts < ?",  # match the labeler's actual queue
+            "AND visit_id IS NOT NULL AND CAST(strftime('%s', ts) AS INTEGER) < CAST(strftime('%s', ?) AS INTEGER)",  # match the labeler's actual queue
             (before_iso,)).fetchone()
         return row[0]
 
@@ -887,7 +891,8 @@ def capture_paths_around(conn, before_iso, window_s=120, limit=12):
         datetime.fromisoformat(before_iso).timestamp() - window_s).isoformat(timespec="seconds")
     with _lock:
         cur = conn.execute(
-            "SELECT path FROM captures WHERE ts > ? AND ts <= ? AND path IS NOT NULL "
+            "SELECT path FROM captures WHERE CAST(strftime('%s', ts) AS INTEGER) > CAST(strftime('%s', ?) AS INTEGER) "
+            "AND CAST(strftime('%s', ts) AS INTEGER) <= CAST(strftime('%s', ?) AS INTEGER) AND path IS NOT NULL "
             "ORDER BY id DESC LIMIT ?", (after, before_iso, limit))
         return [r["path"] for r in cur.fetchall()]
 
@@ -913,7 +918,7 @@ def pending_elimination_notifications(conn, before_iso):
     with _lock:
         cur = conn.execute(
             "SELECT * FROM visits WHERE eliminated=1 AND leave_ts IS NOT NULL "
-            "AND COALESCE(notified,0)=0 AND leave_ts <= ? ORDER BY id", (before_iso,))
+            "AND COALESCE(notified,0)=0 AND CAST(strftime('%s', leave_ts) AS INTEGER) <= CAST(strftime('%s', ?) AS INTEGER) ORDER BY id", (before_iso,))
         return [dict(r) for r in cur.fetchall()]
 
 
@@ -937,7 +942,8 @@ def eliminated_visits_missing_captures(conn, after_iso, before_iso):
         cur = conn.execute(
             "SELECT v.id, v.enter_ts, v.leave_ts FROM visits v "
             "WHERE v.eliminated=1 AND v.leave_ts IS NOT NULL "
-            "AND v.leave_ts > ? AND v.leave_ts <= ? "
+            "AND CAST(strftime('%s', v.leave_ts) AS INTEGER) > CAST(strftime('%s', ?) AS INTEGER) "
+            "AND CAST(strftime('%s', v.leave_ts) AS INTEGER) <= CAST(strftime('%s', ?) AS INTEGER) "
             "AND NOT EXISTS (SELECT 1 FROM captures c WHERE c.visit_id = v.id) "
             "ORDER BY v.id",
             (after_iso, before_iso))
