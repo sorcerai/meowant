@@ -1,6 +1,9 @@
 # Secrets — contains local_key and Tuya cloud credentials. NEVER commit.
 config.json
 
+# Scratch directory (untracked utilities, logs, backups, secrets)
+scratch/
+
 # Python
 __pycache__/
 *.pyc
@@ -13,7 +16,9 @@ snapshot.json
 tuya-raw.json
 tinytuya.json
 
-# monitor logs
+# Logs and backups
+*.log
+*.bak-*
 cycle_log.tsv
 *.tsv
 
@@ -44,6 +49,7 @@ meowantd.log
 docs/explainer/
 deadman_state.json
 deadman.log
+weekly_state.json
 
 # Frontend
 frontend/node_modules/
