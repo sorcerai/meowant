@@ -24,12 +24,26 @@ def test_alert_downgraded_to_uncertain_when_recent_lowconf_use(tmp_path):
     conn = _db(tmp_path)
     # Garfield last *attributed* 32h ago -> would be ALERT (threshold 24h)
     _elim(conn, "Garfield", T - 32 * 3600, conf=1.0)
-    # but the box WAS used recently with low confidence (could be Garfield)
+    # two recent low-confidence eliminations (>=2 is the shared gate)
     _elim(conn, "Ucok", T - 9 * 3600, conf=0.5)
+    _elim(conn, "Ucok", T - 6 * 3600, conf=0.5)
     rows = {r["name"]: r for r in cat_status.cat_status(conn, now_fn=lambda: T)}
     g = rows["Garfield"]
     assert g["status"] != "alert"                 # NOT a confident alarm
     assert g.get("attribution_uncertain") is True # honest "can't confirm"
+
+
+def test_one_uncertain_elim_does_not_suppress_alert(tmp_path):
+    """Boundary: exactly 1 uncertain elimination (<2) must NOT engage the hedge."""
+    conn = _db(tmp_path)
+    # Garfield last *attributed* 32h ago -> would be ALERT
+    _elim(conn, "Garfield", T - 32 * 3600, conf=1.0)
+    # only ONE low-confidence elimination in 24h — below the >=2 gate
+    _elim(conn, "Ucok", T - 9 * 3600, conf=0.5)
+    rows = {r["name"]: r for r in cat_status.cat_status(conn, now_fn=lambda: T)}
+    g = rows["Garfield"]
+    assert g["status"] == "alert"                  # 1 < 2, hedge does not engage
+    assert not g.get("attribution_uncertain")      # no false-uncertainty flag
 
 def test_real_alert_still_fires_when_attribution_clean(tmp_path):
     conn = _db(tmp_path)

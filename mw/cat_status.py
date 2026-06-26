@@ -30,12 +30,10 @@ def cat_status(conn, now_fn=time.time):
         else:
             status = "ok"
         attribution_uncertain = False
-        if status == "alert":
-            uncertain = store.uncertain_eliminations_since(
-                conn, store._iso(now - threshold * 3600))
-            if uncertain > 0:
-                status = "watch"
-                attribution_uncertain = True
+        if status == "alert" and store.attribution_unreliable(
+                conn, store._iso(now - 24 * 3600)):
+            status = "watch"
+            attribution_uncertain = True
         out.append({"name": name, "status": status, "last_litter_ts": last_ts,
                     "hours_since": round(hours, 2), "threshold_h": threshold,
                     "litter_count_today": count, "attribution_uncertain": attribution_uncertain})

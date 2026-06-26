@@ -36,7 +36,7 @@ class HealthWatch:
         # every attribution_renag_hours so a multi-hour outage keeps pinging.
         window_iso = store._iso(now - 24 * 3600)
         uncertain = store.uncertain_eliminations_since(self.conn, window_iso)
-        if uncertain >= 2:
+        if store.attribution_unreliable(self.conn, window_iso):
             last_nag = self._alarmed.get("_attribution_nag", 0)
             if now - last_nag >= self._attribution_renag_s:
                 self.notify(f"⚠️ Attribution degraded — {uncertain} box use(s) in 24h "

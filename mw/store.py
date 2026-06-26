@@ -236,6 +236,13 @@ def uncertain_eliminations_since(conn, after_iso, conf_floor=0.7):
             (conf_floor, after_iso)).fetchone()["n"]
 
 
+def attribution_unreliable(conn, after_iso, conf_floor=0.7, min_count=2):
+    """True when recent attribution is too unreliable to trust a per-cat 'hasn't
+    gone' signal — the shared gate for BOTH the dashboard (cat_status) and the
+    Telegram watcher (health_watch), so they never disagree."""
+    return uncertain_eliminations_since(conn, after_iso, conf_floor) >= min_count
+
+
 def log_incident(conn, kind, signal, action_taken, outcome, notes="", ts=None):
     """Append one watchdog episode to the incidents audit log. `signal` is any
     JSON-serializable dict; `ts` is an epoch float (None -> wall-clock now)."""
