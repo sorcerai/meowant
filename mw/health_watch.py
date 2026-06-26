@@ -24,7 +24,10 @@ class HealthWatch:
         self.digest_hour = digest_hour
         self.interval = interval
         self._attribution_renag_s = attribution_renag_hours * 3600
-        self._alarmed = {}             # dict: cat -> bool or epoch
+        # cat -> bool (no-go latch) or epoch (attribution-nag / spike timer).
+        # PERSISTED: an in-memory dict reset to {} on restart re-fires every
+        # still-active alarm on the first post-restart check -> duplicate alerts.
+        self._alarmed = store.get_daemon_state(conn, "health_watch.alarmed", {}) or {}
         self._digest_day = None        # last local date a digest was sent
 
     def _check_no_go(self):
@@ -163,6 +166,8 @@ class HealthWatch:
         self._check_no_go()
         self._check_frequency_spike()
         self._check_digest()
+        # Persist the latch so a restart doesn't re-fire still-active alarms.
+        store.set_daemon_state(self.conn, "health_watch.alarmed", self._alarmed)
 
     def run(self):
         while True:

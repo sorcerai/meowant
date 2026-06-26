@@ -403,7 +403,9 @@ def main():
             "/bowl": lambda: report.bowl_status_text(conn),
             "/weekly": lambda: report.weekly_status_text(conn),
             "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents /feed /feedstatus /bowl /weekly",
-        }, label_cb=_label_cb)
+        }, label_cb=_label_cb,
+            load_offset=lambda: store.get_daemon_state(conn, "telegram.offset", 0),
+            save_offset=lambda o: store.set_daemon_state(conn, "telegram.offset", o))
         threading.Thread(target=bot.run, daemon=True).start()
         print("telegram-bot: inbound commands (/cats /status /health /incidents), owner-allowlisted")
         # Wire the photo-prompt into the notifier (only when both cameras AND Telegram are configured)

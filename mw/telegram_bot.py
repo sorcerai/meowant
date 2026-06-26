@@ -86,7 +86,8 @@ def send_label_request(token, chat_id, vid, frame_paths, cats, when, waste=""):
 class TelegramBot:
     def __init__(self, token, chat_id, handlers, *,
                  getter=_http_get_updates, sender=_http_send,
-                 sleep=time.sleep, poll_timeout=30, label_cb=None):
+                 sleep=time.sleep, poll_timeout=30, label_cb=None,
+                 load_offset=None, save_offset=None):
         self.token = token
         self.allowed = str(chat_id)          # the allowlist (single owner chat)
         self.handlers = handlers             # {"/cmd": () -> str}
@@ -94,7 +95,12 @@ class TelegramBot:
         self._send = sender
         self._sleep = sleep
         self.poll_timeout = poll_timeout
-        self._offset = 0                     # getUpdates cursor (skip processed)
+        # getUpdates cursor. PERSISTED across restarts: Telegram redelivers any
+        # update we received but never confirmed (confirmation only happens on the
+        # NEXT poll with a higher offset). An in-memory cursor reset to 0 on every
+        # restart re-fetched and re-answered the last batch -> duplicate replies.
+        self._save_offset = save_offset
+        self._offset = load_offset() if load_offset else 0
         self._warned_intruder = False        # ping the owner once per intruder episode
         self.label_cb = label_cb             # (vid: int, cat: str) -> str, or None
 
@@ -137,6 +143,7 @@ class TelegramBot:
         """Handle a batch of getUpdates results. Returns the number of OWNER
         commands answered (intruder messages are dropped, not counted)."""
         answered = 0
+        start_offset = self._offset
         for u in updates:
             self._offset = max(self._offset, u.get("update_id", -1) + 1)
             cq = u.get("callback_query")
@@ -165,6 +172,13 @@ class TelegramBot:
                 continue
             self._reply(self._dispatch(text))
             answered += 1
+        # Persist the advanced cursor so a restart resumes here instead of
+        # replaying this batch. Save once per batch, only when it moved.
+        if self._save_offset and self._offset != start_offset:
+            try:
+                self._save_offset(self._offset)
+            except Exception as e:
+                print(f"[telegram] offset save failed: {e}", file=sys.stderr)
         return answered
 
     def poll_once(self):

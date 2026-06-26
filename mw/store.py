@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS weekly_reports(
   id INTEGER PRIMARY KEY, ts TEXT,
   period_start TEXT, period_end TEXT,
   facts_json TEXT, findings_json TEXT, narrative_json TEXT);
+CREATE TABLE IF NOT EXISTS daemon_state(
+  key TEXT PRIMARY KEY, value TEXT);   -- JSON blobs that must survive a restart
 """
 
 # Columns added after the initial schema shipped; applied idempotently on init.
@@ -57,6 +59,28 @@ _MIGRATIONS = [
     ("feed_events", "feeder", "TEXT"),
     ("bowl_events", "location", "TEXT"),
 ]
+
+
+def get_daemon_state(conn, key, default=None):
+    """Read a JSON-decoded value previously saved under `key`, or `default`.
+    Backs the cross-restart latches/cursors that otherwise reset to in-memory
+    defaults on every daemon restart (re-answering commands, re-firing alarms)."""
+    with _lock:
+        row = conn.execute(
+            "SELECT value FROM daemon_state WHERE key=?", (key,)).fetchone()
+    if row is None:
+        return default
+    return json.loads(row["value"])
+
+
+def set_daemon_state(conn, key, value):
+    """Upsert a JSON-serializable value under `key` so it survives a restart."""
+    with _lock:
+        conn.execute(
+            "INSERT INTO daemon_state(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, json.dumps(value)))
+        conn.commit()
 
 
 def _migrate(conn):

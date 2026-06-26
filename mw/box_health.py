@@ -23,9 +23,20 @@ class BoxHealthWatch:
         self.renag_s = renag_hours * 3600
         self.unusable_s = unusable_hours * 3600
         self.approaching_margin = approaching_margin
-        self._last_nag = 0.0          # epoch of the last bin-full / unusable nag
-        self._approach_clear = None   # the bin_clear ts the approaching-warn is armed against
-        self._approach_warned = False
+        # Latch state, PERSISTED across restarts: reset to defaults on every
+        # restart, an active bin-full would re-nag immediately and the
+        # approaching-full heads-up would re-fire — duplicate alerts.
+        st = store.get_daemon_state(conn, "box_health.latch", {}) or {}
+        self._last_nag = st.get("last_nag", 0.0)        # epoch of last bin-full/unusable nag
+        self._approach_clear = st.get("approach_clear") # bin_clear ts the warn is armed against
+        self._approach_warned = st.get("approach_warned", False)
+
+    def _save_latch(self):
+        store.set_daemon_state(self.conn, "box_health.latch", {
+            "last_nag": self._last_nag,
+            "approach_clear": self._approach_clear,
+            "approach_warned": self._approach_warned,
+        })
 
     def _check(self):
         now = self.now()
@@ -61,11 +72,12 @@ class BoxHealthWatch:
 
     def run_once(self):
         self._check()
+        self._save_latch()   # persist so a restart doesn't re-nag an active alarm
 
     def run(self):
         while True:
             try:
-                self._check()
+                self.run_once()   # _check + persist latch
             except Exception as e:
                 print(f"[box-health] error: {e}", file=sys.stderr)
             time.sleep(self.interval)
