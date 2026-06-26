@@ -154,8 +154,9 @@ def test_no_go_hedge_not_engaged_at_single_unattributed(tmp_path):
 
 
 def test_no_go_attribution_notice_latches_fires_once(tmp_path):
-    """The degraded-attribution notice latches via self._alarmed — it fires once per
-    episode, not every poll."""
+    """The degraded-attribution notice fires once per poll cycle at the same timestamp
+    — two calls at the same now should only produce one ping (re-nag interval not
+    elapsed yet)."""
     from mw import store
     from mw.health_watch import HealthWatch
     conn = store.connect(str(tmp_path / "t.db"))
@@ -171,7 +172,69 @@ def test_no_go_attribution_notice_latches_fires_once(tmp_path):
     visit(now - 2 * 3600, True)                  # recent UNATTRIBUTED elim #1
     visit(now - 3 * 3600, True)                  # recent UNATTRIBUTED elim #2
     msgs = []
-    hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: now)
+    hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: now,
+                     attribution_renag_hours=3)
     hw._check_no_go()
     hw._check_no_go()
     assert sum(1 for m in msgs if "attribution" in m.lower()) == 1
+
+
+def test_no_go_hedge_fires_in_agy_down_state(tmp_path):
+    """Regression guard for Fix 1: in the agy-down state ALL recent eliminations are
+    unattributed; the last ATTRIBUTED visit is >8h ago. Before Fix 1, the silence guard
+    ran first and silently returned 'camera down', eating both the per-cat alarm and the
+    attribution degraded notice. After Fix 1, the hedge runs BEFORE the silence guard
+    and fires the notice."""
+    from mw import store
+    from mw.health_watch import HealthWatch
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella", "Garfield"])
+    now = 2_000_000.0
+    def visit(enter, elim, cat=None):
+        vid = store.open_visit(conn, enter); store.close_visit(conn, vid, enter + 60, 60)
+        if elim: store.mark_elimination(conn, vid, 90)
+        if cat: store.set_visit_identity(conn, vid, store.cat_id_by_name(conn, cat), 1.0)
+    # Last ATTRIBUTED visit is 10h ago (>8h -> old silence guard fires on latest={Ucok:...})
+    visit(now - 10 * 3600, True, cat="Ucok")
+    # Recent UNATTRIBUTED elims: box is being used but agy is down
+    visit(now - 1 * 3600, True)   # unattributed #1
+    visit(now - 2 * 3600, True)   # unattributed #2
+    msgs = []
+    hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: now,
+                     attribution_renag_hours=3)
+    hw._check_no_go()
+    # Must fire the attribution degraded notice — NOT silently return "camera down"
+    assert any("attribution" in m.lower() for m in msgs), (
+        "hedge must fire even when all recent visits are unattributed (agy-down state)")
+
+
+def test_no_go_attribution_renags_after_interval(tmp_path):
+    """Fix 2: the attribution degraded notice must re-nag every attribution_renag_hours,
+    not silently latch after the first ping. Three calls at t, t+2h, t+3h should
+    produce exactly two attribution notices (one immediate, one after the renag interval)."""
+    from mw import store
+    from mw.health_watch import HealthWatch
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella", "Garfield"])
+    base = 2_000_000.0
+    def visit(enter, elim, cat=None):
+        vid = store.open_visit(conn, enter); store.close_visit(conn, vid, enter + 60, 60)
+        if elim: store.mark_elimination(conn, vid, 90)
+        if cat: store.set_visit_identity(conn, vid, store.cat_id_by_name(conn, cat), 1.0)
+    # Two unattributed elims within 24h (relative to base); no attributed visit in >8h
+    visit(base - 1 * 3600, True)   # unattributed #1
+    visit(base - 2 * 3600, True)   # unattributed #2
+    clock = [base]
+    msgs = []
+    hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: clock[0],
+                     attribution_renag_hours=3)
+    hw._check_no_go()               # t=base: first notice fires immediately
+    assert sum(1 for m in msgs if "attribution" in m.lower()) == 1
+    clock[0] = base + 2 * 3600
+    hw._check_no_go()               # t+2h: within renag window → silent
+    assert sum(1 for m in msgs if "attribution" in m.lower()) == 1
+    clock[0] = base + 3 * 3600
+    hw._check_no_go()               # t+3h: renag interval elapsed → re-nags
+    assert sum(1 for m in msgs if "attribution" in m.lower()) == 2

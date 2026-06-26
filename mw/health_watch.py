@@ -12,7 +12,8 @@ from mw import store, report
 
 class HealthWatch:
     def __init__(self, conn, notify, run_llm=None, now_fn=time.time,
-                 no_go_hours=12, digest_hour=9, interval=1800):
+                 no_go_hours=12, digest_hour=9, interval=1800,
+                 attribution_renag_hours=3):
         self.conn = conn
         self.notify = notify
         self.run_llm = run_llm
@@ -20,11 +21,32 @@ class HealthWatch:
         self.no_go_hours = no_go_hours
         self.digest_hour = digest_hour
         self.interval = interval
-        self._alarmed = {}             # dict: cat -> bool
+        self._attribution_renag_s = attribution_renag_hours * 3600
+        self._alarmed = {}             # dict: cat -> bool or epoch
         self._digest_day = None        # last local date a digest was sent
 
     def _check_no_go(self):
         now = self.now()
+
+        # Degraded-attribution guard: runs FIRST so the agy-down state (box being
+        # used but all recent eliminations unattributed, last attributed visit >8h
+        # ago) doesn't get mislabeled as "camera down" by the silence guard below.
+        # When >=2 unattributed eliminations exist in 24h, per-cat no-go alarms are
+        # unreliable and are suppressed; ONE honest notice is sent instead, re-nagged
+        # every attribution_renag_hours so a multi-hour outage keeps pinging.
+        window_iso = store._iso(now - 24 * 3600)
+        unattributed = store.unattributed_eliminations_since(self.conn, window_iso)
+        if unattributed >= 2:
+            last_nag = self._alarmed.get("_attribution_nag", 0)
+            if now - last_nag >= self._attribution_renag_s:
+                self.notify(f"⚠️ Attribution degraded — {unattributed} box use(s) in 24h "
+                            f"couldn't be matched to a cat; per-cat no-go alarms paused. "
+                            f"Check the labeler.")
+                self._alarmed["_attribution_nag"] = now
+            return
+        else:
+            self._alarmed["_attribution_nag"] = 0   # re-arm for next episode
+
         latest = {}
         for s in store.sessions(self.conn):
             if not s["eliminated"] or not s["cat"]:
@@ -37,25 +59,10 @@ class HealthWatch:
 
         if not latest:
             return                     # no data yet
-            
+
         most_recent_any = max(latest.values())
         if (now - most_recent_any) / 3600.0 >= 8:
             return  # System-wide silence; likely camera down, suppress per-cat alarms
-
-        # Degraded-attribution guard: if the box was used but the labeler could
-        # not attribute it, a per-cat "X hasn't gone" alarm is unreliable (it could
-        # be X). Suppress per-cat no-go and raise ONE honest notice instead.
-        window_iso = store._iso(now - 24 * 3600)
-        unattributed = store.unattributed_eliminations_since(self.conn, window_iso)
-        if unattributed >= 2:
-            if not self._alarmed.get("_attribution", False):
-                self.notify(f"⚠️ Attribution degraded — {unattributed} box use(s) in 24h "
-                            f"couldn't be matched to a cat; per-cat no-go alarms paused. "
-                            f"Check the labeler.")
-                self._alarmed["_attribution"] = True
-            return
-        else:
-            self._alarmed["_attribution"] = False
 
         THRESHOLDS = {"Ucok": 8, "Ella": 24, "Garfield": 24}
         lt = time.localtime(now)
