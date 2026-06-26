@@ -228,6 +228,16 @@ def main():
         threading.Thread(target=hb.run, daemon=True).start()
         print("heartbeat: external dead-man's-switch ping")
 
+    from mw.box_health import BoxHealthWatch
+    bhw = BoxHealthWatch(
+        conn, make_notify(lambda k: config.get(cfg, k)),
+        interval=config.get(cfg, "box_health.check_interval_s", 900),
+        renag_hours=config.get(cfg, "box_health.renag_hours", 3),
+        unusable_hours=config.get(cfg, "box_health.unusable_hours", 6),
+        approaching_margin=config.get(cfg, "box_health.approaching_margin", 2))
+    threading.Thread(target=bhw.run, daemon=True).start()
+    print("box-health: bin-full re-nag + UNUSABLE escalation + approaching-full heads-up")
+
     # Feeder (Phase 1): local Tuya control + dispense logging + watchdogs.
     feeder_devs = {}
     feeder_monitors = {}
