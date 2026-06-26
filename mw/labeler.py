@@ -338,7 +338,8 @@ class FallbackLabeler(Labeler):
                 out.append(self._fallback_one(p, refs))
             else:
                 self._fails = 0
-                self._half_open = False                       # primary healthy -> CLOSED
+                self._half_open = False
+                self._open_until = 0.0                        # primary healthy -> true CLOSED
                 out.append(r)
         return out
 
