@@ -17,6 +17,12 @@
     watch: { label: '▲ WATCH', bg: '#ffd32a', color: '#111' },
     alert: { label: '⚠ ALERT', bg: '#ff4757', color: '#fff' },
   }
+
+  // When the box was used but the labeler couldn't confidently attribute it, the
+  // per-cat "hasn't gone" reading is unreliable — show "can't confirm", not an alarm.
+  $: badge = cat.attribution_uncertain
+    ? { label: "❓ CAN'T CONFIRM", bg: '#efe2b3', color: '#6b5d2f' }
+    : pill[cat.status]
 </script>
 
 <!-- Memphis cat card: white bg, hard 2.5px border, shadow color by status -->
@@ -32,8 +38,8 @@
     <span class="font-black text-[15px] text-ink">🐈 {cat.name.toUpperCase()}</span>
     <span
       class="text-[10px] font-extrabold px-[10px] py-[3px] rounded-full"
-      style="background: {pill[cat.status].bg}; color: {pill[cat.status].color};"
-    >{pill[cat.status].label}</span>
+      style="background: {badge.bg}; color: {badge.color};"
+    >{badge.label}</span>
   </div>
 
   <!-- Four metric tiles -->

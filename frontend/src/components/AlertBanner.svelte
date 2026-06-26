@@ -4,9 +4,10 @@
   export let cats: Cat[]
   export let box: BoxHealth | null
 
-  // Derive the single most-pressing alert message (alert > watch > box issues)
+  // Derive the single most-pressing alert message (alert > uncertain > watch > box)
   $: alertCat = cats.find((c) => c.status === 'alert')
-  $: watchCat = cats.find((c) => c.status === 'watch')
+  $: uncertainCat = cats.find((c) => c.attribution_uncertain)
+  $: watchCat = cats.find((c) => c.status === 'watch' && !c.attribution_uncertain)
 
   $: boxMsg = (() => {
     if (!box) return null
@@ -18,6 +19,8 @@
 
   $: message = alertCat
     ? `${alertCat.name.toUpperCase()} — needs attention (${alertCat.hours_since ?? '?'}h since litter)`
+    : uncertainCat
+    ? `${uncertainCat.name.toUpperCase()} — can't confirm box use (attribution uncertain — check labeler)`
     : watchCat
     ? `${watchCat.name.toUpperCase()} — ${watchCat.hours_since ?? '?'}h since litter (watch threshold ${watchCat.threshold_h}h)`
     : boxMsg

@@ -5,6 +5,7 @@ export type Cat = {
   hours_since: number | null
   threshold_h: number
   litter_count_today: number
+  attribution_uncertain?: boolean
   last_ate: { ts: string; location: string; duration_s: number } | null
 }
 
