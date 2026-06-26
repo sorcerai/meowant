@@ -154,10 +154,18 @@ def cleans_since(conn, after_iso):
             (after_iso,)).fetchone()["n"]
 
 
-def bin_fill_capacity(conn):
-    """Learned capacity: MIN clean_done count observed between a bin_clear and the
-    following bin_full, across history. Conservative (min) so the approaching-full
-    heads-up lands before the earliest-possible fill. None if no complete cycle yet."""
+def bin_fill_capacity(conn, window=12, pct=20):
+    """Learned capacity: a low percentile of the clean_done count per fill cycle
+    (between a bin_clear and the following bin_full), over the most recent `window`
+    complete cycles. None if no complete positive cycle yet.
+
+    Why percentile-over-recent-window, not global MIN: a single fluke short cycle
+    under a global MIN sticks forever, dragging the approaching-full heads-up down
+    so it nags every cycle (approaching_margin spans the whole capacity) — nag
+    fatigue / poison. A low percentile ignores an isolated outlier, and the recent
+    window lets capacity track current litter/usage as it drifts. Stays
+    conservative: for a handful of cycles the percentile degrades toward the min,
+    preserving the early heads-up when there isn't enough history to filter."""
     with _lock:
         rows = conn.execute(
             "SELECT kind FROM events WHERE kind IN ('bin_clear','bin_full','clean_done') "
@@ -175,7 +183,11 @@ def bin_fill_capacity(conn):
                 cycles.append(cleans)
             armed = False
     cycles = [c for c in cycles if c > 0]   # skip degenerate zero-clean cycles
-    return min(cycles) if cycles else None
+    if not cycles:
+        return None
+    recent = sorted(cycles[-window:])       # recency window, ascending
+    idx = int(round((pct / 100.0) * (len(recent) - 1)))   # nearest-rank low pctile
+    return recent[idx]
 
 
 def last_elimination_ts(conn):

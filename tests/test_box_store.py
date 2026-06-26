@@ -71,3 +71,38 @@ def test_bin_fill_capacity_ignores_zero_clean_cycle(tmp_path):
     _ev(conn, BIN_FULL, T + 200)
     # Zero-clean cycle must be filtered out; result must be 5 (not 0)
     assert store.bin_fill_capacity(conn) == 5
+
+
+def _cycle(conn, t, n_cleans):
+    """Emit one fill cycle: bin_clear, n clean_done, bin_full. Returns next ts."""
+    _ev(conn, BIN_CLEAR, t)
+    for i in range(n_cleans):
+        _ev(conn, CLEAN_DONE, t + i + 1)
+    _ev(conn, BIN_FULL, t + n_cleans + 1)
+    return t + n_cleans + 10
+
+
+def test_bin_fill_capacity_resists_single_fluke(tmp_path):
+    """fu2: a single fluke short cycle must not poison learned capacity forever.
+    With many normal cycles (9 cleans) and one fluke (3), capacity should reflect
+    the normal behavior (low percentile), not the global MIN (which would be 3 and
+    nag every cycle with approaching_margin=2)."""
+    conn = _db(tmp_path)
+    t = T
+    t = _cycle(conn, t, 3)                       # the fluke
+    for _ in range(9):
+        t = _cycle(conn, t, 9)                   # nine normal cycles
+    cap = store.bin_fill_capacity(conn)
+    assert cap == 9, f"single fluke poisoned capacity (got {cap}, want 9)"
+
+
+def test_bin_fill_capacity_recent_window_ages_out_old_fluke(tmp_path):
+    """fu2: capacity tracks recent behavior — an old fluke beyond the window
+    ages out rather than sticking forever."""
+    conn = _db(tmp_path)
+    t = T
+    t = _cycle(conn, t, 2)                       # ancient fluke
+    for _ in range(13):
+        t = _cycle(conn, t, 8)                   # 13 recent normal cycles (> window)
+    cap = store.bin_fill_capacity(conn)
+    assert cap == 8, f"old fluke not aged out (got {cap}, want 8)"
