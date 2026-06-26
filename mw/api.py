@@ -31,7 +31,7 @@ def _decode_state(dps):
     }
 
 
-def create_app(daemon, conn, bus=None, feeders=None):
+def create_app(daemon, conn, bus=None, feeders=None, monitors=None):
     app = Flask(__name__, static_folder=_static_dir, static_url_path="/static")
 
     @app.get("/")
@@ -133,6 +133,8 @@ def create_app(daemon, conn, bus=None, feeders=None):
                 return jsonify({"ok": False, "error": str(e)}), 500
             if not ok:
                 return jsonify({"ok": False, "error": "feeder unreachable"}), 500
+            if monitors and label in monitors:
+                monitors[label].note_manual_feed()
         else:
             return jsonify({"ok": False, "error": f"unknown action {action}"}), 400
         return jsonify({"ok": True})
@@ -194,18 +196,22 @@ def create_app(daemon, conn, bus=None, feeders=None):
 
         cat_id = store.cat_id_by_name(conn, name)
 
-        # Litter visits for this cat (filter by cat_id, which is what recent_visits rows carry)
-        litter = [
-            {
-                "kind": "litter",
-                "ts": v["enter_ts"],
-                "duration_s": v.get("duration_s"),
-                "eliminated": bool(v.get("eliminated")),
-                "confidence": v.get("confidence"),
-            }
-            for v in store.recent_visits(conn, 60)
-            if v.get("cat_id") == cat_id
-        ][:20]
+        # Litter visits for this cat (filter by cat_id, which is what recent_visits rows carry).
+        # Guard against cat_id=None: that would match ALL unattributed visits (NULL == NULL in Python).
+        if cat_id is None:
+            litter = []
+        else:
+            litter = [
+                {
+                    "kind": "litter",
+                    "ts": v["enter_ts"],
+                    "duration_s": v.get("duration_s"),
+                    "eliminated": bool(v.get("eliminated")),
+                    "confidence": v.get("confidence"),
+                }
+                for v in store.recent_visits(conn, 60)
+                if v.get("cat_id") == cat_id
+            ][:20]
 
         ate = [
             {"kind": "ate", "ts": s["ts"], "location": s["location"], "duration_s": s["duration_s"]}

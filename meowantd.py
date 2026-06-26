@@ -411,7 +411,7 @@ def main():
             elim_notifier.ask_who = lambda vid, paths, when, waste="": send_label_request(
                 tg_token, tg_chat, vid, paths, _valid_cats, when, waste)
 
-    app = create_app(daemon, conn, bus=bus, feeders=feeder_devs)
+    app = create_app(daemon, conn, bus=bus, feeders=feeder_devs, monitors=feeder_monitors)
     print("meowantd → http://0.0.0.0:8765  (smart-clean idle="
           f"{sc.idle}s, enabled={sc.enabled})")
     app.run(host="0.0.0.0", port=8765, threaded=True)

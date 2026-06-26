@@ -43,13 +43,6 @@
     return `${Math.round(s / 60)}m ${s % 60}s`
   }
 
-  function weeklyLabel(key: string): string {
-    const map: Record<string, string> = {
-      voids: 'Litter visits',
-      per_day: 'Per day',
-    }
-    return map[key] ?? key.replace(/_/g, ' ')
-  }
 </script>
 
 <!-- Full-screen fixed backdrop — click outside card to close -->
