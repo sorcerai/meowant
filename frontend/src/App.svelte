@@ -1,12 +1,52 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte'
   // Rename 'state' store to avoid collision with Svelte 5's $state rune
   import { cats, box, bowls, feeders, state as sysState, connected } from './lib/stores'
+  import { getCats, getBoxHealth, getBowls, getFeeders, getState, subscribeEvents } from './lib/api'
   import CatCard from './components/CatCard.svelte'
   import AlertBanner from './components/AlertBanner.svelte'
   import SystemStrip from './components/SystemStrip.svelte'
   import ControlBar from './components/ControlBar.svelte'
 
   $: live = $connected && !$sysState?.stale
+
+  let _interval: ReturnType<typeof setInterval> | undefined
+  let _unsubSSE: (() => void) | null = null
+
+  async function pollRefresh() {
+    const [c, b, bwl] = await Promise.allSettled([getCats(), getBoxHealth(), getBowls()])
+    if (c.status === 'fulfilled') cats.set(c.value)
+    if (b.status === 'fulfilled') box.set(b.value)
+    if (bwl.status === 'fulfilled') bowls.set(bwl.value)
+  }
+
+  onMount(async () => {
+    const [c, b, bwl, f, s] = await Promise.allSettled([
+      getCats(), getBoxHealth(), getBowls(), getFeeders(), getState(),
+    ])
+    if (c.status === 'fulfilled') cats.set(c.value)
+    if (b.status === 'fulfilled') box.set(b.value)
+    if (bwl.status === 'fulfilled') bowls.set(bwl.value)
+    if (f.status === 'fulfilled') feeders.set(f.value)
+    if (s.status === 'fulfilled') sysState.set(s.value)
+
+    _interval = setInterval(pollRefresh, 30_000)
+
+    _unsubSSE = subscribeEvents(
+      async () => {
+        const [c2, s2] = await Promise.allSettled([getCats(), getState()])
+        if (c2.status === 'fulfilled') cats.set(c2.value)
+        if (s2.status === 'fulfilled') sysState.set(s2.value)
+      },
+      () => { connected.set(true) },
+      () => { connected.set(false) },
+    )
+  })
+
+  onDestroy(() => {
+    clearInterval(_interval)
+    _unsubSSE?.()
+  })
 </script>
 
 <!-- Paper background, narrow centered column, phone-first -->
@@ -44,8 +84,8 @@
         <span
           class="block w-2 h-2 rounded-full"
           style="
-            background: {live ? '#2ecc71' : '#e74c3c'};
-            box-shadow: 0 0 6px {live ? '#2ecc71' : '#e74c3c'};
+            background: {live ? '#2ecc71' : '#888'};
+            box-shadow: 0 0 6px {live ? '#2ecc71' : '#888'};
           "
           aria-hidden="true"
         ></span>

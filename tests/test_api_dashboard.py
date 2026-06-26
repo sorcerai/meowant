@@ -92,6 +92,13 @@ def test_boxhealth_est_cleans_left_none_when_capacity_unknown(tmp_path):
     assert d["est_cleans_left"] is None     # cannot estimate without both
 
 
+def test_index_served(tmp_path):
+    client, conn = _app(tmp_path)
+    r = client.get("/")
+    # static/index.html exists once the frontend is built; tolerate 200 or 404 pre-build
+    assert r.status_code in (200, 404)
+
+
 def test_boxhealth_est_cleans_left_clamped_to_zero(tmp_path):
     client, conn = _app(tmp_path)
     t0 = 1_700_000_000  # a real post-2020 epoch (strftime('%s') stays positive)

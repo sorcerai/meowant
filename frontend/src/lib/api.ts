@@ -42,10 +42,16 @@ export const getBowls = () => j<Bowl[]>('/bowls')
 export const getFeeders = () => j<Feeder[]>('/feeders')
 export const getState = () => j<any>('/state')
 
-export function subscribeEvents(onEvent: (e: any) => void): () => void {
+export function subscribeEvents(
+  onEvent: (e: any) => void,
+  onOpen?: () => void,
+  onError?: () => void,
+): () => void {
   const es = new EventSource('/events')
+  es.onopen = () => onOpen?.()
   es.onmessage = (m) => {
     try { onEvent(JSON.parse(m.data)) } catch {}
   }
+  es.onerror = () => onError?.()
   return () => es.close()
 }
