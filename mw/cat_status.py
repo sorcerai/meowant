@@ -20,7 +20,7 @@ def cat_status(conn, now_fn=time.time):
         if last_ts is None:
             out.append({"name": name, "status": "ok", "last_litter_ts": None,
                         "hours_since": None, "threshold_h": threshold,
-                        "litter_count_today": count})
+                        "litter_count_today": count, "attribution_uncertain": False})
             continue
         hours = (now - datetime.fromisoformat(last_ts).timestamp()) / 3600.0
         if hours >= threshold:
@@ -29,7 +29,14 @@ def cat_status(conn, now_fn=time.time):
             status = "watch"
         else:
             status = "ok"
+        attribution_uncertain = False
+        if status == "alert":
+            uncertain = store.uncertain_eliminations_since(
+                conn, store._iso(now - threshold * 3600))
+            if uncertain > 0:
+                status = "watch"
+                attribution_uncertain = True
         out.append({"name": name, "status": status, "last_litter_ts": last_ts,
                     "hours_since": round(hours, 2), "threshold_h": threshold,
-                    "litter_count_today": count})
+                    "litter_count_today": count, "attribution_uncertain": attribution_uncertain})
     return out

@@ -222,6 +222,20 @@ def unattributed_eliminations_since(conn, after_iso):
             (after_iso,)).fetchone()["n"]
 
 
+def uncertain_eliminations_since(conn, after_iso, conf_floor=0.7):
+    """Count eliminated visits that are unreliable to attribute: unattributed
+    (cat_id IS NULL) or low-confidence (confidence < conf_floor), at/after
+    after_iso. A nonzero result means the box was recently used but we can't
+    confidently say by whom — per-cat 'hasn't gone' claims over that window are
+    unreliable and must not fire as a confident alert."""
+    with _lock:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM visits "
+            "WHERE eliminated=1 AND (cat_id IS NULL OR confidence < ?) "
+            "AND strftime('%s', enter_ts) >= strftime('%s', ?)",
+            (conf_floor, after_iso)).fetchone()["n"]
+
+
 def log_incident(conn, kind, signal, action_taken, outcome, notes="", ts=None):
     """Append one watchdog episode to the incidents audit log. `signal` is any
     JSON-serializable dict; `ts` is an epoch float (None -> wall-clock now)."""
