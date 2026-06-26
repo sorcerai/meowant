@@ -186,6 +186,30 @@ def last_elimination_ts(conn):
         return row["enter_ts"] if row else None
 
 
+def last_attributed_elimination_ts(conn, cat_name):
+    """enter_ts of the most recent eliminated+attributed visit for one cat, or None."""
+    with _lock:
+        row = conn.execute(
+            "SELECT v.enter_ts FROM visits v JOIN cats c ON c.id=v.cat_id "
+            "WHERE v.eliminated=1 AND c.name=? ORDER BY v.enter_ts DESC LIMIT 1",
+            (cat_name,)).fetchone()
+        return row["enter_ts"] if row else None
+
+
+def eliminations_today_for_cat(conn, cat_name, now=None):
+    """Count of this cat's eliminated visits since local midnight today."""
+    import time as _t
+    now = now if now is not None else _t.time()
+    lt = _t.localtime(now)
+    midnight = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    with _lock:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM visits v JOIN cats c ON c.id=v.cat_id "
+            "WHERE v.eliminated=1 AND c.name=? "
+            "AND strftime('%s', v.enter_ts) >= ?",
+            (cat_name, str(int(midnight)))).fetchone()["n"]
+
+
 def unattributed_eliminations_since(conn, after_iso):
     """Count eliminated visits with no cat attributed, at/after after_iso.
     A nonzero count means the box was used but the labeler couldn't say by whom —
