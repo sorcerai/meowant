@@ -29,6 +29,10 @@ def test_events_endpoint_streams_published_event(tmp_path):
     gen = iter(app_iter)                          # subscription already happened
     assert captured["headers"]["Content-Type"].startswith("text/event-stream")
 
+    intro = next(gen)                             # initial ": connected" comment flushes headers
+    intro_text = intro.decode() if isinstance(intro, bytes) else intro
+    assert intro_text.startswith(":")             # SSE comment, ignored by clients
+
     bus.publish(Event(BIN_FULL, 1.0, {}))         # now lands in the subscribed queue
     chunk = next(gen)                             # runs gen() once, returns the frame
     text = chunk.decode() if isinstance(chunk, bytes) else chunk
