@@ -31,7 +31,7 @@ def _decode_state(dps):
     }
 
 
-def create_app(daemon, conn, bus=None):
+def create_app(daemon, conn, bus=None, feeders=None):
     app = Flask(__name__, static_folder=_static_dir, static_url_path="/static")
 
     @app.get("/")
@@ -119,6 +119,20 @@ def create_app(daemon, conn, bus=None):
                 daemon.device.set_value(12, end)
             except Exception as e:
                 return jsonify({"ok": False, "error": str(e)}), 500
+        elif action == "feed":
+            label = body.get("feeder")
+            if not feeders or label not in feeders:
+                return jsonify({"ok": False, "error": f"unknown feeder {label}"}), 400
+            try:
+                portions = max(1, min(10, int(body.get("portions", 1))))
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "portions must be an integer"}), 400
+            try:
+                ok = feeders[label].feed(portions)
+            except Exception as e:
+                return jsonify({"ok": False, "error": str(e)}), 500
+            if not ok:
+                return jsonify({"ok": False, "error": "feeder unreachable"}), 500
         else:
             return jsonify({"ok": False, "error": f"unknown action {action}"}), 400
         return jsonify({"ok": True})
@@ -154,7 +168,7 @@ def create_app(daemon, conn, bus=None):
         return jsonify(out)
 
     @app.get("/feeders")
-    def feeders():
+    def feeders_route():
         # TODO Phase 2: read feeder labels from config
         out = []
         for label in ("downstairs", "upstairs"):
