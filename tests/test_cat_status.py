@@ -34,6 +34,7 @@ def test_watch_band(tmp_path):
 def test_alert_at_threshold(tmp_path):
     conn = _db(tmp_path)
     _elim(conn, "Ucok", T - 9 * 3600)         # 9h >= 8 -> alert
+    _elim(conn, "Ella", T - 3600)             # box demonstrably working (no silence guard)
     rows = {r["name"]: r for r in cat_status.cat_status(conn, now_fn=lambda: T)}
     assert rows["Ucok"]["status"] == "alert"
 
@@ -46,14 +47,18 @@ def test_no_data_is_ok_not_alarm(tmp_path):
 
 def test_band_boundaries_are_inclusive(tmp_path):
     # Pins the >= edges: exactly 0.75*threshold -> watch, exactly threshold -> alert.
+    # Ella uses the box recently in each case so the system-silence guard stays
+    # off and the band logic is what's under test.
     conn = _db(tmp_path)
     _elim(conn, "Ucok", T - 6.0 * 3600)       # exactly 0.75*8 = 6.0h -> watch
+    _elim(conn, "Ella", T - 3600)             # box demonstrably working
     rows = {r["name"]: r for r in cat_status.cat_status(conn, now_fn=lambda: T)}
     assert rows["Ucok"]["status"] == "watch"
 
     sub = tmp_path / "b"; sub.mkdir()
     conn2 = _db(sub)
     _elim(conn2, "Ucok", T - 8.0 * 3600)      # exactly threshold 8.0h -> alert
+    _elim(conn2, "Ella", T - 3600)            # box demonstrably working
     rows2 = {r["name"]: r for r in cat_status.cat_status(conn2, now_fn=lambda: T)}
     assert rows2["Ucok"]["status"] == "alert"
 

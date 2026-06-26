@@ -196,6 +196,25 @@ def last_attributed_elimination_ts(conn, cat_name):
         return row["enter_ts"] if row else None
 
 
+def last_real_elimination_ts_any(conn):
+    """enter_ts of the most recent REAL eliminated visit across ALL cats, or None.
+
+    Mirrors health_watch._check_no_go's 'latest' set: excludes Garfield's
+    deliberate short re-entries (use_record IS NULL OR duration_s <= 40), which
+    game the auto-clean timer rather than register a real elimination. This is
+    the input to the system-wide silence guard, so it MUST match health_watch's
+    notion of 'box was used' — otherwise a 30s Garfield re-entry resets the
+    dashboard's silence clock while Telegram's stays put. Orders by epoch math
+    so mixed naive-local / legacy +00:00 timestamps compare correctly."""
+    with _lock:
+        row = conn.execute(
+            "SELECT v.enter_ts FROM visits v JOIN cats c ON c.id=v.cat_id "
+            "WHERE v.eliminated=1 "
+            "AND NOT (c.name='Garfield' AND (v.use_record IS NULL OR v.duration_s <= 40)) "
+            "ORDER BY strftime('%s', v.enter_ts) DESC LIMIT 1").fetchone()
+        return row["enter_ts"] if row else None
+
+
 def eliminations_today_for_cat(conn, cat_name, now=None):
     """Count of this cat's eliminated visits since local midnight today."""
     import time as _t

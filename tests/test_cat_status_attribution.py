@@ -40,6 +40,9 @@ def test_one_uncertain_elim_does_not_suppress_alert(tmp_path):
     _elim(conn, "Garfield", T - 32 * 3600, conf=1.0)
     # only ONE low-confidence elimination in 24h — below the >=2 gate
     _elim(conn, "Ucok", T - 9 * 3600, conf=0.5)
+    # Ella used the box recently & high-conf -> box demonstrably working, so the
+    # system-silence guard stays off and only the attribution gate is tested.
+    _elim(conn, "Ella", T - 2 * 3600, conf=1.0)
     rows = {r["name"]: r for r in cat_status.cat_status(conn, now_fn=lambda: T)}
     g = rows["Garfield"]
     assert g["status"] == "alert"                  # 1 < 2, hedge does not engage
