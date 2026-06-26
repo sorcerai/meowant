@@ -105,7 +105,6 @@ def incidents_report(conn, limit=10):
 
 def digest(conn, now=None):
     """One-line-ish 'alive + today' summary for the daily heartbeat digest."""
-    from datetime import date, datetime
     now = now if now is not None else datetime.now().timestamp()
     today = date.fromtimestamp(now).isoformat()
     sess = store.sessions(conn)
@@ -113,7 +112,6 @@ def digest(conn, now=None):
     if not today_elim:
         base = f"✅ Meowant alive [{today}] — no box uses yet today."
         return base + _feeds_suffix(conn, today) + _bowl_suffix(conn)
-    from collections import Counter
     by_cat = Counter((s["cat"] or "unattributed") for s in today_elim)
     last = max(s["enter_ts"] for s in today_elim)[11:16]
     parts = ", ".join(f"{c} {n}" for c, n in by_cat.most_common())

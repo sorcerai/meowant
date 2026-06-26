@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 
 from mw import store
+from mw.cat_status import THRESHOLDS
 
 
 def _hhmm_to_min(s):
@@ -48,9 +49,6 @@ class DeadManSwitch:
         s, e = _hhmm_to_min(self.quiet_start), _hhmm_to_min(self.quiet_end)
         return (s <= cur < e) if s <= e else (cur >= s or cur < e)
 
-    def check_no_go(self):
-        return None
-
     def check_liveness(self):
         probe = self.state_probe or _http_probe
         st = probe()
@@ -84,7 +82,6 @@ class DeadManSwitch:
         if (now - most_recent_any) / 3600.0 >= 8:
             return []
 
-        THRESHOLDS = {"Ucok": 8, "Ella": 24, "Garfield": 24}
         in_quiet = self._in_quiet(now)
         out = []
 

@@ -2,6 +2,7 @@
 import json
 import sqlite3
 import threading
+import time
 from collections import Counter
 from datetime import datetime, date
 
@@ -217,28 +218,15 @@ def last_real_elimination_ts_any(conn):
 
 def eliminations_today_for_cat(conn, cat_name, now=None):
     """Count of this cat's eliminated visits since local midnight today."""
-    import time as _t
-    now = now if now is not None else _t.time()
-    lt = _t.localtime(now)
-    midnight = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    now = now if now is not None else time.time()
+    lt = time.localtime(now)
+    midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
     with _lock:
         return conn.execute(
             "SELECT COUNT(*) AS n FROM visits v JOIN cats c ON c.id=v.cat_id "
             "WHERE v.eliminated=1 AND c.name=? "
             "AND CAST(strftime('%s', v.enter_ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER)",
             (cat_name, _iso(midnight))).fetchone()["n"]
-
-
-def unattributed_eliminations_since(conn, after_iso):
-    """Count eliminated visits with no cat attributed, at/after after_iso.
-    A nonzero count means the box was used but the labeler couldn't say by whom —
-    the per-cat no-go alarm must not confidently claim a cat 'hasn't gone'."""
-    with _lock:
-        return conn.execute(
-            "SELECT COUNT(*) AS n FROM visits "
-            "WHERE eliminated=1 AND cat_id IS NULL "
-            "AND CAST(strftime('%s', enter_ts) AS INTEGER) >= CAST(strftime('%s', ?) AS INTEGER)",
-            (after_iso,)).fetchone()["n"]
 
 
 def uncertain_eliminations_since(conn, after_iso, conf_floor=0.7):

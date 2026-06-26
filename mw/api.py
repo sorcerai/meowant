@@ -187,7 +187,6 @@ def create_app(daemon, conn, bus=None, feeders=None, monitors=None):
     @app.get("/cat/<name>")
     def cat_detail(name):
         import glob as _glob
-        import json as _json
         from mw import cat_status as _cs
 
         rows = {r["name"]: r for r in _cs.cat_status(conn)}
@@ -223,7 +222,7 @@ def create_app(daemon, conn, bus=None, feeders=None, monitors=None):
 
         rep = store.latest_weekly_report(conn)
         weekly = (
-            _json.loads(rep["facts_json"]).get("per_cat", {}).get(name)
+            json.loads(rep["facts_json"]).get("per_cat", {}).get(name)
             if rep else None
         )
 

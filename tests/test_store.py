@@ -369,21 +369,3 @@ def test_weekly_report_log_latest_recent():
     assert recent[0]["period_end"] == "2026-06-23T00:00:00"   # newest first
 
 
-def test_unattributed_eliminations_since_counts_only_unattributed_elims():
-    conn = store.connect(":memory:")
-    store.init_db(conn)
-    store.seed_cats(conn, ["Ucok", "Ella", "Garfield"])
-    def visit(enter, elim, cat=None):
-        vid = store.open_visit(conn, enter)
-        store.close_visit(conn, vid, enter + 60, 60)
-        if elim:
-            store.mark_elimination(conn, vid, 90)
-        if cat:
-            store.set_visit_identity(conn, vid, store.cat_id_by_name(conn, cat), 1.0)
-        return vid
-    visit(1_000_000.0, True)                 # unattributed elim (counts)
-    visit(1_000_100.0, True, cat="Ella")     # attributed (excluded)
-    visit(1_000_200.0, False)                # no elim (excluded)
-    visit(500_000.0, True)                    # before the window (excluded)
-    after = store._iso(999_999.0)
-    assert store.unattributed_eliminations_since(conn, after) == 1

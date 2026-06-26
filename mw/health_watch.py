@@ -3,11 +3,13 @@
 HealthWatch: a no-go alarm (box unused >N hours -> a cat may be sick/blocked) plus a
 once-daily 'alive' digest. Both run on one slow loop. Heartbeat (separate) pings an
 external URL so a dead daemon/host is caught off-box."""
+import json
 import sys
 import time
 from datetime import date, datetime
 
 from mw import store, report
+from mw.cat_status import THRESHOLDS
 
 
 class HealthWatch:
@@ -64,7 +66,6 @@ class HealthWatch:
         if (now - most_recent_any) / 3600.0 >= 8:
             return  # System-wide silence; likely camera down, suppress per-cat alarms
 
-        THRESHOLDS = {"Ucok": 8, "Ella": 24, "Garfield": 24}
         lt = time.localtime(now)
         is_night = (lt.tm_hour >= 22 or lt.tm_hour < 8)
 
@@ -106,7 +107,6 @@ class HealthWatch:
         four_hours_ago = now - 4 * 3600
         
         # Get baseline from latest weekly report, if available
-        import json
         rep = store.latest_weekly_report(self.conn)
         facts = json.loads(rep["facts_json"]) if rep else {}
         per_cat_facts = facts.get("per_cat", {})

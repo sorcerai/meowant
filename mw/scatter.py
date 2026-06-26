@@ -18,6 +18,8 @@ only the delta on top.
 import cv2
 import numpy as np
 
+from mw.imgutil import _roi
+
 # ROI as fractions of the frame: floor apron in front of the box opening,
 # excluding the box (left), the storage bin, the mop bucket (bottom-right) and
 # the shelving. (x0, y0, x1, y1)
@@ -34,12 +36,6 @@ def severity_from_pct(pct):
     if pct < 20.0:
         return 2   # moderate — a handful
     return 3       # heavy
-
-
-def _roi(img, roi):
-    h, w = img.shape[:2]
-    x0, y0, x1, y1 = roi
-    return img[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
 
 
 def _changed(cur_gray, ref_gray, delta):

@@ -8,14 +8,10 @@ against real empty/some/full frames.
 """
 import cv2
 
+from mw.imgutil import _roi
+
 FULL, SOME, EMPTY = "full", "some", "empty"
 DEFAULT_ROI = (0.30, 0.30, 0.70, 0.70)   # placeholder — calibrate to the bowl
-
-
-def _roi(img, roi):
-    h, w = img.shape[:2]
-    x0, y0, x1, y1 = roi
-    return img[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
 
 
 def changed_pct(frame_path, empty_ref_path, roi=DEFAULT_ROI, delta=22):
