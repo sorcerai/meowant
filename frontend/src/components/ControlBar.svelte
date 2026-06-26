@@ -1,6 +1,9 @@
 <script lang="ts">
-  // Phase 1: Clean is wired; Feed buttons are disabled until Phase 2.
+  import { feed } from '../lib/api'
+
   let cleaning = false
+  let feedingUp = false
+  let feedingDown = false
   let toast: { msg: string; kind: 'ok' | 'err' } | null = null
   let toastTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -32,6 +35,46 @@
       showToast('Connection error', 'err')
     } finally {
       cleaning = false
+    }
+  }
+
+  async function handleFeedUpstairs() {
+    if (feedingUp) return
+    feedingUp = true
+    try {
+      const data: unknown = await feed('upstairs')
+      if (typeof data === 'object' && data !== null && 'ok' in data && (data as Record<string, unknown>).ok) {
+        showToast('Fed upstairs ✓', 'ok')
+      } else {
+        const err = typeof data === 'object' && data !== null && 'error' in data
+          ? String((data as Record<string, unknown>).error)
+          : 'Command failed'
+        showToast(err, 'err')
+      }
+    } catch {
+      showToast('Connection error', 'err')
+    } finally {
+      feedingUp = false
+    }
+  }
+
+  async function handleFeedDownstairs() {
+    if (feedingDown) return
+    feedingDown = true
+    try {
+      const data: unknown = await feed('downstairs')
+      if (typeof data === 'object' && data !== null && 'ok' in data && (data as Record<string, unknown>).ok) {
+        showToast('Fed downstairs ✓', 'ok')
+      } else {
+        const err = typeof data === 'object' && data !== null && 'error' in data
+          ? String((data as Record<string, unknown>).error)
+          : 'Command failed'
+        showToast(err, 'err')
+      }
+    } catch {
+      showToast('Connection error', 'err')
+    } finally {
+      feedingDown = false
     }
   }
 </script>
@@ -69,30 +112,30 @@
     {cleaning ? '⟳ …' : '⟳ Clean'}
   </button>
 
-  <!-- Feed ↑ — disabled, Phase 2 -->
+  <!-- Feed ↑ — upstairs feeder -->
   <button
     type="button"
     class="flex-1 font-extrabold text-[11px] text-white rounded-[10px] py-[9px] px-1 min-h-[40px]
-           opacity-50 cursor-not-allowed focus-visible:outline-2 focus-visible:outline-sys"
+           disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-sys"
     style="background:#00b8a9; border: 2.5px solid #111; box-shadow: 2px 2px 0 #111;"
-    disabled
-    title="Feed control coming in Phase 2"
-    aria-label="Increase feed amount (coming in Phase 2)"
+    disabled={feedingUp}
+    aria-label="Feed upstairs"
+    onclick={handleFeedUpstairs}
   >
-    🍽 Feed ↑
+    {feedingUp ? '⟳ …' : '🍽 Feed ↑'}
   </button>
 
-  <!-- Feed ↓ — disabled, Phase 2 -->
+  <!-- Feed ↓ — downstairs feeder -->
   <button
     type="button"
     class="flex-1 font-extrabold text-[11px] text-white rounded-[10px] py-[9px] px-1 min-h-[40px]
-           opacity-50 cursor-not-allowed focus-visible:outline-2 focus-visible:outline-sys"
+           disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-sys"
     style="background:#00b8a9; border: 2.5px solid #111; box-shadow: 2px 2px 0 #111;"
-    disabled
-    title="Feed control coming in Phase 2"
-    aria-label="Decrease feed amount (coming in Phase 2)"
+    disabled={feedingDown}
+    aria-label="Feed downstairs"
+    onclick={handleFeedDownstairs}
   >
-    🍽 Feed ↓
+    {feedingDown ? '⟳ …' : '🍽 Feed ↓'}
   </button>
 
   <!-- Settings — stub for Phase 2 -->

@@ -43,6 +43,13 @@ export const getBowls = () => j<Bowl[]>('/bowls')
 export const getFeeders = () => j<Feeder[]>('/feeders')
 export const getState = () => j<any>('/state')
 
+export const feed = (feeder: string, portions = 1) =>
+  fetch('/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'feed', feeder, portions }),
+  }).then(r => r.json())
+
 export function subscribeEvents(
   onEvent: (e: any) => void,
   onOpen?: () => void,
