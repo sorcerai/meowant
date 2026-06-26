@@ -137,7 +137,8 @@ def unattributed_eliminations_since(conn, after_iso):
     with _lock:
         return conn.execute(
             "SELECT COUNT(*) AS n FROM visits "
-            "WHERE eliminated=1 AND cat_id IS NULL AND enter_ts >= ?",
+            "WHERE eliminated=1 AND cat_id IS NULL "
+            "AND strftime('%s', enter_ts) >= strftime('%s', ?)",
             (after_iso,)).fetchone()["n"]
 
 

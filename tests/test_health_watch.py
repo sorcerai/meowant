@@ -151,3 +151,27 @@ def test_no_go_hedge_not_engaged_at_single_unattributed(tmp_path):
     # Hedge NOT engaged: real per-cat alarm still fires, no attribution notice.
     assert any("No litter box use" in m and "Ella" in m for m in msgs)
     assert not any("attribution" in m.lower() for m in msgs)
+
+
+def test_no_go_attribution_notice_latches_fires_once(tmp_path):
+    """The degraded-attribution notice latches via self._alarmed — it fires once per
+    episode, not every poll."""
+    from mw import store
+    from mw.health_watch import HealthWatch
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella", "Garfield"])
+    now = 2_000_000.0
+    def visit(enter, elim, cat=None):
+        vid = store.open_visit(conn, enter); store.close_visit(conn, vid, enter + 60, 60)
+        if elim: store.mark_elimination(conn, vid, 90)
+        if cat: store.set_visit_identity(conn, vid, store.cat_id_by_name(conn, cat), 1.0)
+    visit(now - 1 * 3600, True, cat="Ella")     # recent attributed -> guard stays quiet
+    visit(now - 10 * 3600, True, cat="Ucok")    # Ucok 10h ago (>8h)
+    visit(now - 2 * 3600, True)                  # recent UNATTRIBUTED elim #1
+    visit(now - 3 * 3600, True)                  # recent UNATTRIBUTED elim #2
+    msgs = []
+    hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: now)
+    hw._check_no_go()
+    hw._check_no_go()
+    assert sum(1 for m in msgs if "attribution" in m.lower()) == 1
