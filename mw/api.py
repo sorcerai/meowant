@@ -31,10 +31,43 @@ def _decode_state(dps):
     }
 
 
+def _default_reload():
+    """Restart the daemon out-of-band so the HTTP response (which runs INSIDE the
+    daemon) flushes first — sleep, then kickstart kills+restarts this process."""
+    import subprocess
+    uid = os.getuid()
+    subprocess.Popen(
+        ["sh", "-c", f"sleep 1; launchctl kickstart -k gui/{uid}/com.meowant.daemon"])
+
+
 def create_app(daemon, conn, bus=None, feeders=None, monitors=None,
-               gallery_dir="gallery"):
+               gallery_dir="gallery", config_path="config.json", reload_fn=None):
     app = Flask(__name__, static_folder=_static_dir, static_url_path="/static")
     gallery_abs = os.path.abspath(gallery_dir)
+    reload_fn = reload_fn or _default_reload
+
+    @app.get("/config")
+    def get_config():
+        from mw import config_write
+        try:
+            with open(config_path) as f:
+                cfg = json.load(f)
+        except Exception as e:
+            return jsonify({"error": f"config unreadable: {e}"}), 500
+        return jsonify(config_write.read_safe(cfg))
+
+    @app.post("/config")
+    def post_config():
+        from mw import config_write
+        edits = request.get_json(silent=True) or {}
+        try:
+            applied = config_write.apply_edits(config_path, edits)
+        except ValueError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"write failed: {e}"}), 500
+        reload_fn()   # detached restart; response flushes before the process dies
+        return jsonify({"ok": True, "applied": applied})
 
     @app.get("/")
     def index():

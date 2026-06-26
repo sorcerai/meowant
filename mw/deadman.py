@@ -7,13 +7,8 @@ import sys
 import time
 from datetime import datetime
 
-from mw import store
+from mw import store, schedule
 from mw.cat_status import THRESHOLDS
-
-
-def _hhmm_to_min(s):
-    h, m = s.split(":")
-    return int(h) * 60 + int(m)
 
 
 def _http_probe(url="http://localhost:8765/state", timeout=5):
@@ -44,10 +39,7 @@ class DeadManSwitch:
         self.state_probe = state_probe        # () -> dict|None ; None => default HTTP probe
 
     def _in_quiet(self, now):
-        lt = time.localtime(now)
-        cur = lt.tm_hour * 60 + lt.tm_min
-        s, e = _hhmm_to_min(self.quiet_start), _hhmm_to_min(self.quiet_end)
-        return (s <= cur < e) if s <= e else (cur >= s or cur < e)
+        return schedule.is_quiet(now, self.quiet_start, self.quiet_end)
 
     def check_liveness(self):
         probe = self.state_probe or _http_probe

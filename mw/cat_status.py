@@ -15,7 +15,25 @@ from datetime import datetime
 
 from mw import store
 
-THRESHOLDS = {"Ucok": 8, "Ella": 24, "Garfield": 24}
+_DEFAULT_THRESHOLDS = {"Ucok": 8, "Ella": 24, "Garfield": 24}
+# Single source of truth (29e): health_watch + deadman import this exact object.
+# load_thresholds() mutates it IN PLACE so those importers see config-driven
+# values without re-importing. Defaults apply for any cat the config omits.
+THRESHOLDS = dict(_DEFAULT_THRESHOLDS)
+
+
+def load_thresholds(cfg):
+    """Apply config `thresholds` over the code defaults, in place. Ignores
+    non-positive / non-numeric entries (a bad value must not silently disable a
+    cat's no-go alarm). Called once at daemon startup; on a config change the
+    daemon restarts and re-applies."""
+    merged = dict(_DEFAULT_THRESHOLDS)
+    for cat, val in (cfg.get("thresholds") or {}).items():
+        if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+            merged[cat] = val
+    THRESHOLDS.clear()
+    THRESHOLDS.update(merged)
+    return THRESHOLDS
 
 
 def cat_status(conn, now_fn=time.time):

@@ -8,14 +8,14 @@ import sys
 import time
 from datetime import date, datetime
 
-from mw import store, report
+from mw import store, report, schedule
 from mw.cat_status import THRESHOLDS
 
 
 class HealthWatch:
     def __init__(self, conn, notify, run_llm=None, now_fn=time.time,
                  no_go_hours=12, digest_hour=9, interval=1800,
-                 attribution_renag_hours=3):
+                 attribution_renag_hours=3, quiet_start="22:00", quiet_end="08:00"):
         self.conn = conn
         self.notify = notify
         self.run_llm = run_llm
@@ -23,6 +23,8 @@ class HealthWatch:
         self.no_go_hours = no_go_hours
         self.digest_hour = digest_hour
         self.interval = interval
+        self.quiet_start = quiet_start   # overnight window for the Ucok daytime-tolerance rule
+        self.quiet_end = quiet_end
         self._attribution_renag_s = attribution_renag_hours * 3600
         # cat -> bool (no-go latch) or epoch (attribution-nag / spike timer).
         # PERSISTED: an in-memory dict reset to {} on restart re-fires every
@@ -69,8 +71,7 @@ class HealthWatch:
         if (now - most_recent_any) / 3600.0 >= 8:
             return  # System-wide silence; likely camera down, suppress per-cat alarms
 
-        lt = time.localtime(now)
-        is_night = (lt.tm_hour >= 22 or lt.tm_hour < 8)
+        is_night = schedule.is_quiet(now, self.quiet_start, self.quiet_end)
 
         for cat, limit in THRESHOLDS.items():
             t = latest.get(cat)

@@ -45,6 +45,11 @@ def main():
     store.init_db(conn)
     store.seed_cats(conn, ["Ucok", "Garfield", "Ella"])
 
+    # Apply config-driven per-cat thresholds (Settings panel writes these);
+    # in-place so health_watch/deadman, which import cat_status.THRESHOLDS, see them.
+    from mw import cat_status
+    cat_status.load_thresholds(cfg)
+
     threading.Thread(target=_run_pruner, args=(conn, "."),
                      daemon=True).start()
 
@@ -218,7 +223,9 @@ def main():
         run_llm=custom_run,
         no_go_hours=config.get(cfg, "health.no_go_hours", 12),
         digest_hour=config.get(cfg, "health.digest_hour", 9),
-        interval=config.get(cfg, "health.check_interval_s", 1800))
+        interval=config.get(cfg, "health.check_interval_s", 1800),
+        quiet_start=config.get(cfg, "quiet_start", "22:00"),
+        quiet_end=config.get(cfg, "quiet_end", "08:00"))
     threading.Thread(target=hw.run, daemon=True).start()
     print("health-watch: no-go alarm + daily digest")
 
@@ -413,7 +420,8 @@ def main():
             elim_notifier.ask_who = lambda vid, paths, when, waste="": send_label_request(
                 tg_token, tg_chat, vid, paths, _valid_cats, when, waste)
 
-    app = create_app(daemon, conn, bus=bus, feeders=feeder_devs, monitors=feeder_monitors)
+    app = create_app(daemon, conn, bus=bus, feeders=feeder_devs, monitors=feeder_monitors,
+                     config_path="config.json")
     print("meowantd → http://0.0.0.0:8765  (smart-clean idle="
           f"{sc.idle}s, enabled={sc.enabled})")
     app.run(host="0.0.0.0", port=8765, threaded=True)
