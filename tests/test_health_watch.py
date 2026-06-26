@@ -283,3 +283,32 @@ def test_no_go_hedged_when_recent_attribution_low_confidence(tmp_path):
         "Garfield no-go alarm must NOT fire when recent low-confidence visits may be his")
     assert any("attribution" in m.lower() for m in msgs), (
         "Attribution-degraded notice must fire when recent low-confidence visits present")
+
+
+def test_frameless_visits_do_not_trigger_false_uti_alarm(tmp_path):
+    """4+ visits in 4h but ALL frameless (no dp102 weight record) means we have
+    NO volume evidence. avg_vol=0.0 is a 'no data' sentinel, not 'zero output' —
+    it must NOT fire the UTI/blockage alarm (cry-wolf against the north star)."""
+    conn = _conn(tmp_path)
+    sent = []
+    now = {"t": 100000.0}
+    for i in range(4):                                  # 4 frameless elims in last 4h
+        _elim(conn, now["t"] - (i + 1) * 1800, cat="Ucok", use_record=None)
+    hw = HealthWatch(conn, sent.append, now_fn=lambda: now["t"], digest_hour=99)
+    hw.run_once()
+    uti = [m for m in sent if "UTI" in m or "blockage" in m or "low output" in m]
+    assert uti == [], f"false UTI alarm on frameless visits (no weight evidence): {uti}"
+
+
+def test_real_low_volume_still_fires_uti_alarm(tmp_path):
+    """Positive control: when weight evidence IS present and genuinely low, the
+    dual-signal UTI alarm must still fire — the fix only suppresses no-evidence."""
+    conn = _conn(tmp_path)
+    sent = []
+    now = {"t": 100000.0}
+    for i in range(4):                                  # 4 elims, real but tiny output
+        _elim(conn, now["t"] - (i + 1) * 1800, cat="Ucok", use_record=5)
+    hw = HealthWatch(conn, sent.append, now_fn=lambda: now["t"], digest_hour=99)
+    hw.run_once()
+    uti = [m for m in sent if "UTI" in m or "blockage" in m]
+    assert len(uti) == 1, f"genuine low-volume signal must still fire: {sent}"

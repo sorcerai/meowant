@@ -134,8 +134,14 @@ class HealthWatch:
 
             # Calculate average volume in this window. Ignore None weights.
             weights = [s["use_record"] for s in sessions if s["use_record"] is not None]
-            avg_vol = sum(weights)/len(weights) if weights else 0.0
-            
+            if not weights:
+                # All visits frameless (no dp102 weight). We have NO volume
+                # evidence — avg 0.0 would be a 'no data' sentinel, not 'zero
+                # output'. Firing here is a false UTI/blockage alarm. Skip.
+                self._alarmed.pop(f"{cat}_spike", None)
+                continue
+            avg_vol = sum(weights)/len(weights)
+
             # If frequency >= 4 in 4h AND volume < 50% of baseline, fire alert
             if avg_vol < (0.5 * baseline_vol):
                 if not self._alarmed.get(f"{cat}_spike", False):
