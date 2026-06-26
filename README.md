@@ -95,3 +95,4 @@ and pulling the `local_key` via the Tuya IoT cloud API.
 The same `device_id` / `local_key` / `version` work with the
 [LocalTuya](https://github.com/rospogrigio/localtuya) integration for fully
 local HA control.
+# tier2 smoke test marker
