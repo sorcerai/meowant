@@ -12,3 +12,9 @@ def test_litterbox_cameras_excludes_bowl_cams():
 def test_litterbox_cameras_no_bowls_returns_all():
     cams = [{"name": "meowcam1"}, {"name": "meowcam2"}]
     assert litterbox_cameras(cams, []) == cams
+
+
+def test_litterbox_cameras_ignores_bowl_without_camera_key():
+    cams = [{"name": "meowcam1"}, {"name": "meowcam3"}]
+    bowls = [{"location": "upstairs"}]      # malformed: no 'camera'
+    assert litterbox_cameras(cams, bowls) == cams   # nothing dropped

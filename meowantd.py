@@ -35,7 +35,7 @@ def litterbox_cameras(cameras, bowls):
     """Cameras used for litterbox ID/scatter — everything NOT assigned to a bowl.
     Bowl cams (BowlWatch) must not be captured for litterbox visits: their frames
     never show the box and each one costs a labeler call."""
-    bowl_cams = {b.get("camera") for b in (bowls or [])}
+    bowl_cams = {b["camera"] for b in (bowls or []) if b.get("camera")}
     return [c for c in cameras if c.get("name") not in bowl_cams]
 
 
