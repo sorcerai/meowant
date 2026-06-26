@@ -131,7 +131,7 @@ def main():
         from mw.catfilter import TorchvisionCatFilter
         catfilter = TorchvisionCatFilter()  # shared: cat/no-cat for labels + floor-clear for scatter
         _cats = list(store.gallery_counts(conn).keys())
-        autolabeler = AutoLabeler(conn, FallbackLabeler(AgyLabeler(), LlamaCppLabeler()), discover_refs("gallery", _cats), _cats,
+        autolabeler = AutoLabeler(conn, FallbackLabeler(AgyLabeler(timeout=45), LlamaCppLabeler()), discover_refs("gallery", _cats), _cats,
                                   catfilter=catfilter)  # drop empties before agy
         threading.Thread(
             target=autolabeler.run,

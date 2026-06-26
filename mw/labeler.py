@@ -5,6 +5,7 @@ a strict cross-frame agreement gate so only confident calls are auto-applied.
 import json
 import subprocess
 import sys
+import time
 from collections import Counter
 
 # Canonical cat names the labeler may return, plus two sentinels:
@@ -99,7 +100,7 @@ class AgyLabeler(Labeler):
 
     CATS = ("Ucok", "Garfield", "Ella")
 
-    def __init__(self, timeout=240):
+    def __init__(self, timeout=45):
         self.timeout = timeout
 
     def _prompt(self, frame_path, refs):
@@ -283,20 +284,48 @@ class LlamaCppLabeler(Labeler):
 
 
 class FallbackLabeler(Labeler):
-    """Tries a primary labeler; if it returns ERROR, retries with a fallback labeler."""
+    """Primary labeler with a fast-fail circuit-breaker to a fallback.
 
-    def __init__(self, primary: Labeler, fallback: Labeler):
+    Per frame: if the breaker is open, skip the primary and use the fallback
+    directly. Otherwise try the primary; on ERROR, count it and use the fallback
+    for that frame. After `fail_threshold` consecutive primary errors the breaker
+    OPENS for `cooldown_s` (so a primary outage costs ~`fail_threshold` timeouts,
+    not one per frame). After the cooldown the next call half-opens — it retries
+    the primary once; a success resets, another failure re-trips.
+    """
+
+    def __init__(self, primary, fallback, *, fail_threshold=2,
+                 cooldown_s=1800, now_fn=time.time):
         self.primary = primary
         self.fallback = fallback
+        self.fail_threshold = fail_threshold
+        self.cooldown_s = cooldown_s
+        self.now = now_fn
+        self._fails = 0
+        self._open_until = 0.0
+
+    def _fallback_one(self, path, refs):
+        fb = self.fallback.predict_visit([path], refs)
+        return fb[0] if fb else {"file": path, "cat": ERROR, "confidence": 0.0}
 
     def predict_visit(self, frame_paths, refs):
-        results = self.primary.predict_visit(frame_paths, refs)
-        # Check if primary failed on any frames
-        for i, r in enumerate(results):
+        out = []
+        for p in frame_paths:
+            if self.now() < self._open_until:
+                out.append(self._fallback_one(p, refs))   # breaker OPEN -> fallback
+                continue
+            r = self.primary.predict_visit([p], refs)
+            r = r[0] if r else {"file": p, "cat": ERROR, "confidence": 0.0}
             if r.get("cat") == ERROR:
-                print(f"[labeler/fallback] Primary failed on {r['file']}, trying fallback...", file=sys.stderr)
-                fallback_results = self.fallback.predict_visit([r['file']], refs)
-                if fallback_results:
-                    results[i] = fallback_results[0]
-        return results
+                self._fails += 1
+                if self._fails >= self.fail_threshold:
+                    self._open_until = self.now() + self.cooldown_s
+                    self._fails = 0
+                    print("[labeler/breaker] primary tripped open; "
+                          f"fallback-only for {self.cooldown_s}s", file=sys.stderr)
+                out.append(self._fallback_one(p, refs))
+            else:
+                self._fails = 0                            # primary healthy -> reset streak
+                out.append(r)
+        return out
 
