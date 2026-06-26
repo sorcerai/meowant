@@ -135,11 +135,28 @@ def test_missed_drop_fires_after_grace(tmp_path):
     seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
     dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
     msgs = []
-    # now = 07:31, grace 30min -> window closed, no feed logged -> miss
+    # monitor was watching since before the meal; now = 07:31 -> window closed, no feed -> miss
+    clock = [seven - 600]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
+                      mealtimes=["07:00"], miss_grace_minutes=30)
+    clock[0] = seven + 31 * 60
+    m.poll_once()
+    assert len(msgs) == 1 and "07:00" in msgs[0] and "missed" in msgs[0].lower()
+
+
+def test_missed_drop_silent_for_meal_closed_before_start(tmp_path):
+    conn = _db(tmp_path)
+    import time as _t
+    lt = _t.localtime(T)
+    seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    # monitor STARTS at 07:31 — the 07:00 window already closed, so it could not have
+    # watched that meal. It must NOT retroactively alarm (e.g. on every daemon restart).
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: seven + 31 * 60,
                       mealtimes=["07:00"], miss_grace_minutes=30)
     m.poll_once()
-    assert len(msgs) == 1 and "07:00" in msgs[0] and "missed" in msgs[0].lower()
+    assert msgs == []
 
 
 def test_missed_drop_silent_when_feed_landed(tmp_path):
@@ -150,8 +167,10 @@ def test_missed_drop_silent_when_feed_landed(tmp_path):
     store.log_feed_event(conn, 2, "scheduled", ts=seven + 60, feeder="test_feeder")   # fed at 07:01
     dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
     msgs = []
-    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: seven + 31 * 60,
+    clock = [seven - 600]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
                       mealtimes=["07:00"], miss_grace_minutes=30)
+    clock[0] = seven + 31 * 60
     m.poll_once()
     assert msgs == []                                # drop happened -> no alarm
 
@@ -205,3 +224,34 @@ def test_two_feeds_per_poll_logs_only_last(tmp_path):
     rows = store.recent_feed_events(conn)
     assert len(rows) == 1
     assert rows[0]["portions"] == 4
+
+
+def test_feed_detected_when_poll_lands_on_done_not_feeding(tmp_path):
+    # Andoll's "feeding" state is ~3s; a fast-poll can land on "done" (post-feed)
+    # and never observe "feeding". The detector must still log the feed — trigger
+    # on entering ANY active feed-state (feeding|done), not only "feeding".
+    conn = _db(tmp_path)
+    dev = FakeFeederDevice([
+        {"online": True, "food_level": None, "last_feed": None, "feed_state": "standby"},
+        {"online": True, "food_level": None, "last_feed": None, "feed_state": "done"},
+        {"online": True, "food_level": None, "last_feed": None, "feed_state": "standby"},
+    ])
+    m = FeederMonitor(dev, conn, notify=lambda x: None, now_fn=lambda: T)
+    m.poll_once(); m.poll_once(); m.poll_once()
+    rows = store.recent_feed_events(conn)
+    assert len(rows) == 1                       # the feed (seen only as 'done') is logged
+
+
+def test_feeding_then_done_logs_one_feed_not_two(tmp_path):
+    # A single feed seen across both active states must log exactly once.
+    conn = _db(tmp_path)
+    dev = FakeFeederDevice([
+        {"online": True, "food_level": None, "last_feed": None, "feed_state": "standby"},
+        {"online": True, "food_level": None, "last_feed": None, "feed_state": "feeding"},
+        {"online": True, "food_level": None, "last_feed": None, "feed_state": "done"},
+        {"online": True, "food_level": None, "last_feed": None, "feed_state": "standby"},
+    ])
+    m = FeederMonitor(dev, conn, notify=lambda x: None, now_fn=lambda: T)
+    for _ in range(4):
+        m.poll_once()
+    assert len(store.recent_feed_events(conn)) == 1

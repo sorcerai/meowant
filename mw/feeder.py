@@ -36,10 +36,16 @@ PROFILES = {
     "Andoll": {
         "manual_feed": 3,
         "feed_state": "4",
-        "food_level": "10",  # Guessing 10 or none
-        "feed_record": "14",
+        "food_level": None,  # dp10 validated NOT food level (stays 0 through a real feed)
+        "feed_record": "14", # dp14 = last-feed portion count (best-effort; not a reliable trigger)
     }
 }
+
+# Transient feed-active states. A dispense is detected as a transition INTO one of
+# these from a resting state. PLAF103 rests in "feed_end", Andoll in "standby" — so
+# neither resting state is here. "done" is included because the Andoll "feeding"
+# window is ~3s and a poll can land on the post-feed "done" instead.
+ACTIVE_FEED_STATES = ("feeding", "done")
 
 class FeederDevice:
     def __init__(self, cfg):
@@ -126,6 +132,7 @@ class FeederMonitor:
         self._hopper_alerted = False
         self._missed_alerted = set()        # {(date_iso, "HH:MM")}
         self._expect_manual_until = 0
+        self._started = self.now()          # don't alarm meals that closed pre-start
 
         self.bowl_watch = None
         self._preshots = {}                 # hhmm -> (ts, changed_pct)
@@ -160,7 +167,11 @@ class FeederMonitor:
         now = self.now()
         source = "manual" if now <= self._expect_manual_until else "scheduled"
 
-        if feed_state == "feeding" and self._last_feed_state != "feeding":
+        active = feed_state in ACTIVE_FEED_STATES
+        was_active = self._last_feed_state in ACTIVE_FEED_STATES
+        if active and not was_active:
+            # Entered an active feed-state -> a dispense. Trigger on feeding|done so a
+            # fast-poll that misses the brief "feeding" still catches the feed via "done".
             store.log_feed_event(self.conn, 0, source, feeder=self.label, ts=now)
             self._last_logged_feed_ts = now
             if source == "manual":
@@ -207,6 +218,8 @@ class FeederMonitor:
             meal = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
             start = meal - (self.miss_lead_minutes * 60)
             deadline = meal + self.miss_grace_minutes * 60
+            if deadline <= self._started:
+                continue                     # meal closed before we started watching
             if now < deadline:
                 continue                     # window still open
             
