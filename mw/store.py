@@ -173,6 +173,7 @@ def bin_fill_capacity(conn):
             if armed:
                 cycles.append(cleans)
             armed = False
+    cycles = [c for c in cycles if c > 0]   # skip degenerate zero-clean cycles
     return min(cycles) if cycles else None
 
 

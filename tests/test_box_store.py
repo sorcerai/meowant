@@ -54,3 +54,20 @@ def test_bin_fill_capacity_none_without_complete_cycle(tmp_path):
     _ev(conn, BIN_CLEAR, T)
     _ev(conn, CLEAN_DONE, T + 1)          # no bin_full yet -> no complete cycle
     assert store.bin_fill_capacity(conn) is None
+
+
+def test_bin_fill_capacity_ignores_zero_clean_cycle(tmp_path):
+    """Fix 4: a degenerate cycle (bin_clear immediately followed by bin_full with
+    zero clean_done in between) must not pollute the min — min(0, 5) = 0 would make
+    the `if cap:` guard in callers falsy, silently disabling approaching-full forever.
+    The real min over non-degenerate cycles (5 here) must be returned instead."""
+    conn = _db(tmp_path)
+    # Degenerate cycle: bin_clear → bin_full with zero cleans
+    _ev(conn, BIN_CLEAR, T)
+    _ev(conn, BIN_FULL, T + 1)            # 0 cleans → degenerate cycle
+    # Normal cycle: clear → 5 cleans → full
+    _ev(conn, BIN_CLEAR, T + 100)
+    for i in range(5): _ev(conn, CLEAN_DONE, T + 101 + i)
+    _ev(conn, BIN_FULL, T + 200)
+    # Zero-clean cycle must be filtered out; result must be 5 (not 0)
+    assert store.bin_fill_capacity(conn) == 5
