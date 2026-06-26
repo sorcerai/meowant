@@ -3,6 +3,7 @@ builds itself. Pluggable backend (claude -p haiku now, offline VLM later) +
 a strict cross-frame agreement gate so only confident calls are auto-applied.
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -104,9 +105,14 @@ class AgyLabeler(Labeler):
         self.timeout = timeout
 
     def _prompt(self, frame_path, refs):
+        # agy reads images via its file tools and only resolves ABSOLUTE paths
+        # (see class docstring). The DB stores relative paths, so make every path
+        # absolute here — passing relatives made agy hang -> ERROR -> silent
+        # fallback to Gemma (the real "agy is down").
         ref_lines = ""
         for name, paths in refs.items():
             ps = paths if isinstance(paths, (list, tuple)) else [paths]
+            ps = [os.path.abspath(p) for p in ps]
             ref_lines += f"{name} reference(s): {', '.join(ps)}\n"
         return (
             "Identify which of three specific cats is in a litter-box photo.\n"
@@ -114,7 +120,7 @@ class AgyLabeler(Labeler):
             "Garfield = ORANGE mackerel tabby, often wearing a collar.\n"
             "Ella = long-haired tortie, fluffy coat, ear tufts.\n"
             + (ref_lines if ref_lines else "")
-            + f"Look at this photo (read the file): {frame_path}\n"
+            + f"Look at this photo (read the file): {os.path.abspath(frame_path)}\n"
             "Reply with ONLY one word: Ucok, Garfield, Ella, or none "
             "(none = empty box / no cat visible)."
         )
