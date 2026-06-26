@@ -121,6 +121,61 @@ def mark_elimination(conn, visit_id, use_record=None):
         conn.commit()
 
 
+def bin_full_since(conn):
+    """ISO ts of the most recent bin_full NOT followed by a bin_clear, else None.
+    Ordering by autoincrement id is monotonic and tz-immune. None => bin is clear."""
+    with _lock:
+        full = conn.execute(
+            "SELECT id, ts FROM events WHERE kind='bin_full' ORDER BY id DESC LIMIT 1").fetchone()
+        if not full:
+            return None
+        clear = conn.execute(
+            "SELECT id FROM events WHERE kind='bin_clear' ORDER BY id DESC LIMIT 1").fetchone()
+        if clear and clear["id"] > full["id"]:
+            return None
+        return full["ts"]
+
+
+def last_bin_clear_ts(conn):
+    """ISO ts of the most recent bin_clear (the start of the current fill cycle), else None."""
+    with _lock:
+        row = conn.execute(
+            "SELECT ts FROM events WHERE kind='bin_clear' ORDER BY id DESC LIMIT 1").fetchone()
+        return row["ts"] if row else None
+
+
+def cleans_since(conn, after_iso):
+    """Count clean_done events strictly after after_iso — cleans into the current fill cycle."""
+    with _lock:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM events WHERE kind='clean_done' "
+            "AND strftime('%s', ts) > strftime('%s', ?)",
+            (after_iso,)).fetchone()["n"]
+
+
+def bin_fill_capacity(conn):
+    """Learned capacity: MIN clean_done count observed between a bin_clear and the
+    following bin_full, across history. Conservative (min) so the approaching-full
+    heads-up lands before the earliest-possible fill. None if no complete cycle yet."""
+    with _lock:
+        rows = conn.execute(
+            "SELECT kind FROM events WHERE kind IN ('bin_clear','bin_full','clean_done') "
+            "ORDER BY id").fetchall()
+    cycles, cleans, armed = [], 0, False
+    for r in rows:
+        k = r["kind"]
+        if k == "bin_clear":
+            cleans, armed = 0, True
+        elif k == "clean_done":
+            if armed:
+                cleans += 1
+        elif k == "bin_full":
+            if armed:
+                cycles.append(cleans)
+            armed = False
+    return min(cycles) if cycles else None
+
+
 def last_elimination_ts(conn):
     """enter_ts of the most recent eliminated visit, or None — drives the no-go alarm."""
     with _lock:
