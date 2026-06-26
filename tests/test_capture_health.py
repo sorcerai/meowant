@@ -192,3 +192,28 @@ def test_stream_down_escalates_when_persistent(tmp_path):
         R.time.sleep = orig_sleep
     assert len(msgs) == 1 and "DOWN" in msgs[0]
     assert store.recent_incidents(conn)[0]["outcome"] == "escalated"
+
+
+def test_run_once_isolates_exceptions(tmp_path):
+    conn = _db(tmp_path)
+    h = CaptureHealth(conn, [{"name": "c", "url": "u"}], notify=lambda m: None,
+                      probe=lambda u: True, now_fn=lambda: T)
+    
+    ran = set()
+    def fail_streams():
+        ran.add("streams")
+        raise ValueError("streams crashed")
+    def fail_missed():
+        ran.add("missed")
+        raise RuntimeError("missed crashed")
+    def fail_labeler():
+        ran.add("labeler")
+        raise Exception("labeler crashed")
+        
+    h.check_streams = fail_streams
+    h.check_missed = fail_missed
+    h.check_labeler = fail_labeler
+    
+    # none of the raises should bubble out, and all three should run
+    h.run_once()
+    assert ran == {"streams", "missed", "labeler"}

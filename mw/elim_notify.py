@@ -15,7 +15,7 @@ _WASTE_MARK = {"pee": " — pee 💧", "poop": " — poop 💩", "uncertain": " 
 
 class EliminationNotifier:
     def __init__(self, conn, labeler, notify, now_fn=time.time,
-                 settle_s=15, interval=30, sample=5, ask_who=None, pee_threshold=80, poop_threshold=130):
+                 settle_s=15, interval=30, sample=5, ask_who=None, pee_threshold=80, poop_threshold=130, enabled=True):
         self.conn = conn
         self.labeler = labeler            # has .label_visit(vid, sample=...)
         self.notify = notify
@@ -26,6 +26,7 @@ class EliminationNotifier:
         self.ask_who = ask_who            # optional (vid, paths, when, waste) -> None
         self.pee_threshold = pee_threshold
         self.poop_threshold = poop_threshold
+        self.enabled = enabled
 
     def _waste_mark(self, visit):
         return _WASTE_MARK.get(classify_waste(visit.get("use_record"), self.pee_threshold, self.poop_threshold), "")
@@ -48,7 +49,8 @@ class EliminationNotifier:
             fresh = store.get_visit(self.conn, v["id"]) or v   # re-read post-label cat_id
             cat_id = fresh["cat_id"]
             if cat_id:
-                self.notify(self._alert_text(fresh))
+                if self.enabled:
+                    self.notify(self._alert_text(fresh))
             elif self.ask_who is not None:
                 paths = [c["path"] for c in store.captures_for_visit(self.conn, v["id"])]
                 if not paths:
@@ -60,9 +62,9 @@ class EliminationNotifier:
                 when = time.strftime("%H:%M", time.localtime(self.now()))
                 if paths:
                     self.ask_who(v["id"], paths, when, self._waste_mark(fresh))
-                else:
+                elif self.enabled:
                     self.notify(self._alert_text(fresh))   # nothing to show — plain text
-            else:
+            elif self.enabled:
                 self.notify(self._alert_text(fresh))     # fallback: dead-end text
             store.mark_notified(self.conn, v["id"])
 

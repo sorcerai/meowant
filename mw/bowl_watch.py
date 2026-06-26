@@ -66,12 +66,14 @@ class BowlWatch:
         self._prev_state = store.last_bowl_state(conn, location=self.location)   # resume across restarts
         self._empty_streak = 0
         self._empty_alerted = False
+        self._feed_fail_alerted = False
 
     def _record_has_food(self, state):
         """Re-arm and persist a vision row on a state CHANGE so /bowl + the digest
         reflect the current bowl state. Logs only on change (not every poll)."""
         self._empty_streak = 0
         self._empty_alerted = False
+        self._feed_fail_alerted = False
         if state != self._prev_state:
             store.log_bowl_event(self.conn, state, "vision", location=self.location, ts=self.now())
             self._prev_state = state
@@ -136,7 +138,9 @@ class BowlWatch:
                                f"{self.auto_feed_portions} portion(s).") is not False:
                     self._empty_alerted = True
             else:
-                self.notify(f"⚠️ Bowl '{self.location}' empty + auto-feed FAILED (feeder unreachable?).")
+                if not self._feed_fail_alerted:
+                    if self.notify(f"⚠️ Bowl '{self.location}' empty + auto-feed FAILED (feeder unreachable?).") is not False:
+                        self._feed_fail_alerted = True
         else:
             if self.notify(f"\U0001f514 Bowl '{self.location}' empty — /feed {self.location} to refill?") is not False:
                 self._empty_alerted = True

@@ -146,3 +146,52 @@ def test_non_empty_logged_only_on_change(tmp_path, monkeypatch):
     w.poll_once(); w.poll_once(); w.poll_once()    # 3 identical 'full' reads
     rows = [r for r in store.recent_bowl_events(conn) if r["source"] == "vision"]
     assert len(rows) == 1               # logged once (on change), not every poll
+
+
+def test_feed_fail_latches_alert_but_keeps_retrying(tmp_path, monkeypatch):
+    conn = _db(tmp_path)
+    sent = []
+    feeder = _Feeder(ok=False)
+    def _notify(m):
+        sent.append(m)
+        return True
+    w = BowlWatch(grab=lambda: "f.jpg", catfilter=_Cat(), conn=conn,
+                  notify=_notify, feeder=feeder, now_fn=lambda: T,
+                  empty_ref="ref.jpg", confirm_empty=lambda p: True,
+                  auto_feed=True, auto_feed_portions=2)
+    monkeypatch.setattr(bowl, "fullness", lambda *a, **k: bowl.EMPTY)
+    w.poll_once(); w.poll_once()                    # tries to feed, fails -> alerts FAILED
+    assert len(sent) == 1
+    assert "FAILED" in sent[-1]
+    assert len(feeder.fed) == 1
+    assert not w._empty_alerted                     # should not latch empty episode so it retries
+    assert w._feed_fail_alerted                     # but the failure alert IS latched
+    w.poll_once()                                   # retries
+    assert len(feeder.fed) == 2                     # keeps retrying
+    assert len(sent) == 1                           # but does not re-alert
+
+
+def test_agy_returns_none_skips_action(tmp_path, monkeypatch):
+    conn = _db(tmp_path)
+    msgs = []
+    w = _watch(tmp_path, conn, notify=msgs.append, confirm_empty=lambda p: None)
+    monkeypatch.setattr(bowl, "fullness", lambda *a, **k: bowl.EMPTY)
+    w.poll_once(); w.poll_once()
+    assert msgs == []
+    assert w._empty_streak == 0
+
+
+def test_auto_feed_false_with_feeder_only_alerts(tmp_path, monkeypatch):
+    conn = _db(tmp_path)
+    msgs = []
+    feeder = _Feeder(ok=True)
+    w = BowlWatch(grab=lambda: "f.jpg", catfilter=_Cat(), conn=conn,
+                  notify=msgs.append, feeder=feeder, now_fn=lambda: T,
+                  empty_ref="ref.jpg", confirm_empty=lambda p: True,
+                  auto_feed=False)
+    monkeypatch.setattr(bowl, "fullness", lambda *a, **k: bowl.EMPTY)
+    w.poll_once(); w.poll_once()
+    assert msgs
+    assert not feeder.fed                           # never calls feeder
+    assert w._empty_alerted                         # latches normally
+

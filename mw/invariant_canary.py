@@ -18,17 +18,19 @@ from mw import store
 
 class InvariantCanary:
     def __init__(self, conn, notify, now_fn=time.time, window_hours=48,
-                 grace_hours=2, min_sample=4, min_ratio=0.5, interval=3600,
-                 realarm=True):
+                 grace_hours=2, min_sample=4, min_ratio=0.6, interval=3600,
+                 realarm=True, baseline_days=30, margin=0.15):
         self.conn = conn
         self.notify = notify
         self.now = now_fn
         self.window_hours = window_hours
         self.grace_hours = grace_hours
-        self.min_sample = min_sample
+        self.min_sample = max(1, min_sample)
         self.min_ratio = min_ratio
         self.interval = interval
         self.realarm = realarm
+        self.baseline_days = baseline_days
+        self.margin = margin
         self._alarmed = False
 
     def evaluate(self):
@@ -38,13 +40,21 @@ class InvariantCanary:
         before = store._iso(now - self.grace_hours * 3600)   # skip too-recent visits
         framed_raw, attributed, frameless_raw = store.elimination_attribution_stats(self.conn, after, before)
         
+        baseline_after = store._iso(now - self.baseline_days * 86400)
+        b_framed, b_attr, _ = store.elimination_attribution_stats(self.conn, baseline_after, after)
+        
+        dynamic_ratio = self.min_ratio
+        if b_framed >= 10:
+            b_ratio = b_attr / b_framed
+            dynamic_ratio = max(self.min_ratio, b_ratio - self.margin)
+        
         errors = []
         if framed_raw >= self.min_sample:
             ratio = attributed / framed_raw
-            if ratio < self.min_ratio:
+            if ratio < dynamic_ratio:
                 errors.append(f"🔬 Attribution canary: only {attributed}/{framed_raw} framed "
                               f"eliminations got a cat ID ({ratio:.0%}) over the last "
-                              f"{self.window_hours}h — the labeler may be silently dropping "
+                              f"{self.window_hours}h (threshold {dynamic_ratio:.0%}) — the labeler may be silently dropping "
                               f"health events")
                               
         total_visits = framed_raw + frameless_raw

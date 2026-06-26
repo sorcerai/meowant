@@ -116,3 +116,15 @@ def test_alert_marks_pee_vs_poop(tmp_path):
     assert "poop" in poop and "💩" in poop
     assert "uncertain" in uncertain and "❓" in uncertain
     assert "pee" not in unknown and "poop" not in unknown   # no marker when unknown
+
+
+def test_disabled_silences_alert_but_marks_notified(tmp_path):
+    conn, _, sent = _setup(tmp_path, cat="Ucok")
+    from mw.elim_notify import EliminationNotifier
+    n = EliminationNotifier(conn, _Labeler(conn, "Ucok"), notify=sent.append,
+                            now_fn=lambda: 10_000.0, enabled=False)
+    v = store.open_visit(conn, 9_000.0); store.mark_elimination(conn, v, 55)
+    store.close_visit(conn, v, 9_900.0, 900)
+    n.run_once()
+    assert sent == []                               # silenced
+    assert store.get_visit(conn, v)["notified"] == 1 # but still marked to avoid backlog

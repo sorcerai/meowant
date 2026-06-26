@@ -109,3 +109,12 @@ def test_high_frameless_ratio_fires_observability_alarm(tmp_path):
     c.run_once()
     assert len(msgs) == 1
     assert "observability canary" in msgs[0].lower() and "5/5" in msgs[0]
+
+
+def test_min_sample_zero_does_not_zero_divide(tmp_path):
+    conn = _db(tmp_path)
+    # no eliminations, so raw=0
+    c = InvariantCanary(conn, notify=lambda m: None, now_fn=lambda: T, min_sample=0)
+    # should not raise ZeroDivisionError because min_sample is clamped to >=1
+    # meaning raw (0) >= min_sample (1) will be False
+    c.run_once()

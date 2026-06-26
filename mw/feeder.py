@@ -169,6 +169,10 @@ class FeederMonitor:
 
         if not last_feed or last_feed.get("ts") is None:
             return
+        
+        # Note: dp-118 holds only the LAST feed event.
+        # Two dispenses within one 120s poll will log as one (the first is overwritten).
+        # This is practically implausible given normal meal spacing, so we accept the undercount.
         ts = last_feed["ts"]
         if self._last_logged_feed_ts is not None and ts <= self._last_logged_feed_ts + 60:
             return

@@ -144,7 +144,8 @@ def main():
         elim_notifier = EliminationNotifier(
             conn, autolabeler, notify=make_notify(lambda k: config.get(cfg, k)),
             pee_threshold=config.get(cfg, "alerts.pee_threshold", 80),
-            poop_threshold=config.get(cfg, "alerts.poop_threshold", 130))
+            poop_threshold=config.get(cfg, "alerts.poop_threshold", 130),
+            enabled=config.get(cfg, "alerts.notify_eliminations", True))
         threading.Thread(target=elim_notifier.run, daemon=True).start()
         print("elim-notifier: named 'who used the box' alerts (label-on-leave)")
 
@@ -234,6 +235,9 @@ def main():
             if not f_cfg.get("enabled", True) or not f_cfg.get("device_id"):
                 continue
             lbl = f_cfg.get("label", "default")
+            if not f_cfg.get("address") or not f_cfg.get("local_key"):
+                print(f"feeder '{lbl}': missing address or local_key, skipping", file=sys.stderr)
+                continue
             f_dev = FeederDevice(f_cfg)
             f_mon = FeederMonitor(
                 f_dev, conn, make_notify(lambda k: config.get(cfg, k)),

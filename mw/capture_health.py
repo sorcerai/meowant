@@ -100,9 +100,18 @@ class CaptureHealth:
     def run_once(self):
         if not self.cameras:
             return  # camera-absent install: nothing to probe or guard
-        self.check_streams()
-        self.check_missed()
-        self.check_labeler()
+        try:
+            self.check_streams()
+        except Exception as e:
+            print(f"[capture-health] check_streams error: {e}", file=sys.stderr)
+        try:
+            self.check_missed()
+        except Exception as e:
+            print(f"[capture-health] check_missed error: {e}", file=sys.stderr)
+        try:
+            self.check_labeler()
+        except Exception as e:
+            print(f"[capture-health] check_labeler error: {e}", file=sys.stderr)
 
     def run(self, interval=300.0):
         while True:
