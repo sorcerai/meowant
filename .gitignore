@@ -44,3 +44,7 @@ meowantd.log
 docs/explainer/
 deadman_state.json
 deadman.log
+
+# Frontend
+frontend/node_modules/
+frontend/dist/

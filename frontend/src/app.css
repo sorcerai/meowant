@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #fdf3e0;
+  --color-ink: #111;
+  --color-ok: #00b8a9;
+  --color-watch: #ffd32a;
+  --color-alert: #ff4757;
+  --color-sys: #3742fa;
+  --color-live: #2ecc71;
+  --shadow-pop: 3px 3px 0 #111;
+  --shadow-pop-ok: 3px 3px 0 #00b8a9;
+  --shadow-pop-watch: 3px 3px 0 #ffd32a;
+  --shadow-pop-alert: 3px 3px 0 #ff4757;
+}
+
+:root { color-scheme: light; }
+body { margin: 0; background: #fdf3e0; font-family: 'Poppins', Trebuchet MS, system-ui, sans-serif; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
