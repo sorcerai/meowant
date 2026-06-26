@@ -4,11 +4,14 @@
   import { cats, box, bowls, feeders, state as sysState, connected } from './lib/stores'
   import { getCats, getBoxHealth, getBowls, getFeeders, getState, subscribeEvents } from './lib/api'
   import CatCard from './components/CatCard.svelte'
+  import CatDetail from './components/CatDetail.svelte'
   import AlertBanner from './components/AlertBanner.svelte'
   import SystemStrip from './components/SystemStrip.svelte'
   import ControlBar from './components/ControlBar.svelte'
 
   $: live = $connected && !$sysState?.stale
+
+  let selected: string | null = null
 
   let _interval: ReturnType<typeof setInterval> | undefined
   let _unsubSSE: (() => void) | null = null
@@ -101,7 +104,7 @@
     <!-- ── Cat cards ── -->
     <div class="flex flex-col gap-[11px] mb-3">
       {#each $cats as cat (cat.name)}
-        <CatCard {cat} />
+        <CatCard {cat} onOpen={() => (selected = cat.name)} />
       {/each}
 
       {#if $cats.length === 0}
@@ -113,6 +116,11 @@
         </div>
       {/if}
     </div>
+
+    <!-- ── Cat Detail overlay ── -->
+    {#if selected}
+      <CatDetail name={selected} onClose={() => (selected = null)} />
+    {/if}
 
     <!-- ── System strip ── -->
     <div class="mb-3">

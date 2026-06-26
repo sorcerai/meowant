@@ -3,6 +3,7 @@
   import { relativeTime, statusColor } from '../lib/format'
 
   export let cat: Cat
+  export let onOpen: () => void = () => {}
 
   function fmtTime(iso: string): string {
     return new Date(iso).toLocaleTimeString('en-US', {
@@ -31,7 +32,7 @@
   class="w-full text-left bg-white rounded-[14px] p-3 focus-visible:outline-2 focus-visible:outline-sys"
   style="border: 2.5px solid #111; box-shadow: 3px 3px 0 {statusColor(cat.status)};"
   aria-label="View details for {cat.name}"
-  onclick={() => {/* detail view — Phase 2 */}}
+  onclick={onOpen}
 >
   <!-- Name + status pill -->
   <div class="flex justify-between items-center">

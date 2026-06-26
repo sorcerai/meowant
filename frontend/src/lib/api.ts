@@ -37,6 +37,21 @@ const j = async <T>(p: string): Promise<T> => {
   return r.json()
 }
 
+export type CatDetailT = Cat & {
+  timeline: {
+    kind: string
+    ts: string
+    duration_s?: number
+    location?: string
+    eliminated?: boolean
+    confidence?: number
+  }[]
+  weekly: any
+  photos: string[]
+}
+
+export const getCatDetail = (name: string) => j<CatDetailT>('/cat/' + encodeURIComponent(name))
+
 export const getCats = () => j<Cat[]>('/cats')
 export const getBoxHealth = () => j<BoxHealth>('/boxhealth')
 export const getBowls = () => j<Bowl[]>('/bowls')
