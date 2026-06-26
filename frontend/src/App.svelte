@@ -5,6 +5,7 @@
   import { getCats, getBoxHealth, getBowls, getFeeders, getState, subscribeEvents } from './lib/api'
   import CatCard from './components/CatCard.svelte'
   import CatDetail from './components/CatDetail.svelte'
+  import Settings from './components/Settings.svelte'
   import AlertBanner from './components/AlertBanner.svelte'
   import SystemStrip from './components/SystemStrip.svelte'
   import ControlBar from './components/ControlBar.svelte'
@@ -12,6 +13,7 @@
   $: live = $connected && !$sysState?.stale
 
   let selected: string | null = null
+  let showSettings = false
 
   let _interval: ReturnType<typeof setInterval> | undefined
   let _unsubSSE: (() => void) | null = null
@@ -122,13 +124,18 @@
       <CatDetail name={selected} onClose={() => (selected = null)} />
     {/if}
 
+    <!-- ── Settings overlay ── -->
+    {#if showSettings}
+      <Settings onClose={() => (showSettings = false)} />
+    {/if}
+
     <!-- ── System strip ── -->
     <div class="mb-3">
       <SystemStrip box={$box} bowls={$bowls} feeders={$feeders} state={$sysState} />
     </div>
 
     <!-- ── Control bar ── -->
-    <ControlBar />
+    <ControlBar onSettings={() => (showSettings = true)} />
 
   </div>
 </div>

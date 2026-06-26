@@ -8,6 +8,6 @@ export default defineConfig({
   plugins: [tailwindcss(), svelte()],
   build: { outDir: '../static', emptyOutDir: false, assetsDir: 'assets' },
   server: { proxy: Object.fromEntries(
-    ['/state','/cats','/visits','/boxhealth','/bowls','/feeders','/command','/events']
+    ['/state','/cats','/visits','/boxhealth','/bowls','/feeders','/command','/events','/config']
       .map(p => [p, { target: 'http://localhost:8765', changeOrigin: true }])) },
 })

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { feed } from '../lib/api'
 
+  export let onSettings: () => void = () => {}
+
   let cleaning = false
   let feedingUp = false
   let feedingDown = false
@@ -144,8 +146,8 @@
     class="flex-none w-11 font-extrabold text-[13px] text-ink bg-white rounded-[10px] py-[9px] min-h-[40px]
            focus-visible:outline-2 focus-visible:outline-sys"
     style="border: 2.5px solid #111; box-shadow: 2px 2px 0 #111;"
-    aria-label="Settings (coming soon)"
-    onclick={() => {/* settings stub */}}
+    aria-label="Open settings"
+    onclick={onSettings}
   >
     ⚙
   </button>

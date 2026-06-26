@@ -65,6 +65,27 @@ export const feed = (feeder: string, portions = 1) =>
     body: JSON.stringify({ action: 'feed', feeder, portions }),
   }).then(r => r.json())
 
+export type SafeConfig = {
+  quiet_start: string
+  quiet_end: string
+  smartclean: { enabled: boolean; idle_seconds: number }
+  feeders: { label: string; mealtimes: string[] }[]
+  thresholds: { [cat: string]: number }
+}
+
+export const getConfig = () => j<SafeConfig>('/config')
+
+export const saveConfig = async (
+  edits: Partial<SafeConfig>,
+): Promise<{ ok: boolean; error?: string; applied?: SafeConfig }> => {
+  const r = await fetch('/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(edits),
+  })
+  return r.json()
+}
+
 export function subscribeEvents(
   onEvent: (e: any) => void,
   onOpen?: () => void,
