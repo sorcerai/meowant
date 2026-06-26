@@ -31,12 +31,20 @@ def _decode_state(dps):
     }
 
 
-def create_app(daemon, conn, bus=None, feeders=None, monitors=None):
+def create_app(daemon, conn, bus=None, feeders=None, monitors=None,
+               gallery_dir="gallery"):
     app = Flask(__name__, static_folder=_static_dir, static_url_path="/static")
+    gallery_abs = os.path.abspath(gallery_dir)
 
     @app.get("/")
     def index():
         return send_from_directory(_static_dir, "index.html")
+
+    @app.get("/gallery/<path:p>")
+    def gallery(p):
+        # Serve cat photos from gallery/. send_from_directory uses safe_join,
+        # which rejects path-traversal (../) — a 404 rather than escaping the dir.
+        return send_from_directory(gallery_abs, p)
 
     @app.get("/state")
     def state():
@@ -226,7 +234,9 @@ def create_app(daemon, conn, bus=None, feeders=None, monitors=None):
             if rep else None
         )
 
-        photos = sorted(_glob.glob(f"gallery/{name.lower()}/*.jp*"))[:6]
+        # Browser-fetchable URLs (served by the /gallery route), not FS paths.
+        files = sorted(_glob.glob(os.path.join(gallery_abs, name.lower(), "*.jp*")))[:6]
+        photos = [f"/gallery/{name.lower()}/{os.path.basename(f)}" for f in files]
 
         return jsonify({**rows[name], "timeline": timeline, "weekly": weekly, "photos": photos})
 

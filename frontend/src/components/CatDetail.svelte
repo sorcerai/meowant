@@ -251,14 +251,17 @@
               <div class="text-[12px] font-bold mb-2" style="color: #111;">
                 {data.photos.length} reference photo{data.photos.length === 1 ? '' : 's'}
               </div>
-              <div class="flex flex-col gap-[3px]">
+              <div class="grid grid-cols-3 gap-[6px]">
                 {#each data.photos as photo}
-                  <div class="text-[11px] font-mono" style="color: #8a7a55;">
-                    {photo.split('/').pop()}
-                  </div>
+                  <img
+                    src={photo}
+                    alt="reference photo"
+                    loading="lazy"
+                    class="w-full aspect-square object-cover rounded-[8px]"
+                    style="border: 1.5px solid #111;"
+                  />
                 {/each}
               </div>
-              <!-- TODO Phase 3: serve gallery images -->
             </div>
           {/if}
         </div>
