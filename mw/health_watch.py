@@ -35,13 +35,13 @@ class HealthWatch:
         # unreliable and are suppressed; ONE honest notice is sent instead, re-nagged
         # every attribution_renag_hours so a multi-hour outage keeps pinging.
         window_iso = store._iso(now - 24 * 3600)
-        unattributed = store.unattributed_eliminations_since(self.conn, window_iso)
-        if unattributed >= 2:
+        uncertain = store.uncertain_eliminations_since(self.conn, window_iso)
+        if uncertain >= 2:
             last_nag = self._alarmed.get("_attribution_nag", 0)
             if now - last_nag >= self._attribution_renag_s:
-                self.notify(f"⚠️ Attribution degraded — {unattributed} box use(s) in 24h "
-                            f"couldn't be matched to a cat; per-cat no-go alarms paused. "
-                            f"Check the labeler.")
+                self.notify(f"⚠️ Attribution degraded — {uncertain} box use(s) in 24h "
+                            f"couldn't be confidently matched to a cat; per-cat no-go "
+                            f"alarms paused. Check the labeler.")
                 self._alarmed["_attribution_nag"] = now
             return
         else:

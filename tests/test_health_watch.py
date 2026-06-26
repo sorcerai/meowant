@@ -238,3 +238,48 @@ def test_no_go_attribution_renags_after_interval(tmp_path):
     clock[0] = base + 3 * 3600
     hw._check_no_go()               # t+3h: renag interval elapsed → re-nags
     assert sum(1 for m in msgs if "attribution" in m.lower()) == 2
+
+
+def test_no_go_hedged_when_recent_attribution_low_confidence(tmp_path):
+    """Regression: mis-attributed (low-confidence) eliminations must engage the hedge.
+
+    Garfield's last visit is 33h ago (past his 24h threshold). Two recent elims
+    (within 24h) are attributed to OTHER cats with confidence=0.5 — they have a
+    non-null cat_id so unattributed_eliminations_since returns 0, meaning the OLD
+    hedge (based on unattributed) never fires and Garfield's false alarm fires.
+
+    After the fix, uncertain_eliminations_since counts both low-confidence visits
+    (count=2 >= 2), engages the hedge, suppresses the Garfield alarm, and sends
+    one attribution-degraded notice instead."""
+    from mw import store
+    from mw.health_watch import HealthWatch
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella", "Garfield"])
+    now = 2_000_000.0
+
+    def visit(enter, elim, cat=None, confidence=1.0, duration=60, use_record=90):
+        vid = store.open_visit(conn, enter)
+        store.close_visit(conn, vid, enter + duration, duration)
+        if elim:
+            store.mark_elimination(conn, vid, use_record)
+        if cat:
+            store.set_visit_identity(conn, vid, store.cat_id_by_name(conn, cat), confidence)
+        return vid
+
+    # Garfield's last valid eliminated visit: 33h ago (>24h threshold, valid weight+duration)
+    visit(now - 33 * 3600, True, cat="Garfield", confidence=1.0, duration=60, use_record=90)
+    # 2 recent elims mis-attributed to other cats at LOW confidence (cat_id is NOT null)
+    visit(now - 2 * 3600, True, cat="Ucok", confidence=0.5)
+    visit(now - 3 * 3600, True, cat="Ella", confidence=0.5)
+    # Recent high-confidence use keeps the system-wide 8h silence guard quiet
+    visit(now - 1 * 3600, True, cat="Ucok", confidence=1.0)
+
+    msgs = []
+    hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: now, digest_hour=99)
+    hw._check_no_go()
+
+    assert not any("Garfield" in m and "No litter box use" in m for m in msgs), (
+        "Garfield no-go alarm must NOT fire when recent low-confidence visits may be his")
+    assert any("attribution" in m.lower() for m in msgs), (
+        "Attribution-degraded notice must fire when recent low-confidence visits present")
