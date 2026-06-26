@@ -1,5 +1,6 @@
 """Read/command HTTP API over the daemon's current state + store."""
 import json
+import queue
 import os
 import time
 
@@ -171,14 +172,26 @@ def create_app(daemon, conn, bus=None):
             q = bus.subscribe()
 
             def gen():
+                # Flush headers immediately so the client's EventSource fires
+                # `onopen` (and shows "live") without waiting for the first event —
+                # otherwise the generator blocks on q.get() and the response never
+                # opens. A periodic keepalive comment also keeps idle proxies from
+                # dropping the stream.
+                yield ": connected\n\n"
                 try:
                     while True:
-                        ev = q.get()
+                        try:
+                            ev = q.get(timeout=20)
+                        except queue.Empty:
+                            yield ": keepalive\n\n"
+                            continue
                         yield ("data: " + json.dumps(
                             {"kind": ev.kind, "ts": ev.ts, "detail": ev.detail}) + "\n\n")
                 finally:
                     bus.unsubscribe(q)
 
-            return Response(gen(), mimetype="text/event-stream")
+            return Response(gen(), mimetype="text/event-stream",
+                            headers={"Cache-Control": "no-cache",
+                                     "X-Accel-Buffering": "no"})
 
     return app
