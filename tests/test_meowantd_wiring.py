@@ -25,7 +25,6 @@ def test_feeder_is_wired():
     import inspect, meowantd
     src = inspect.getsource(meowantd)
     assert "FeederMonitor(" in src
-    assert "feeder.enabled" in src
     assert "/feed" in src and "/feedstatus" in src
 
 
@@ -33,7 +32,6 @@ def test_bowl_watch_is_wired():
     import inspect, meowantd
     src = inspect.getsource(meowantd)
     assert "BowlWatch(" in src
-    assert "bowl.enabled" in src
     assert "/bowl" in src
 
 

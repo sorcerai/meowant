@@ -10,8 +10,8 @@
   },
   "smartclean": {
     "enabled": true,
-    "idle_seconds": 90,
-    "max_wait_seconds": 480
+    "idle_seconds": 60,
+    "max_wait_seconds": 240
   },
   "cameras": [
     {"name": "litter", "url": "rtsp://USER:PASS@192.168.1.X:554/Streaming/Channels/102"}

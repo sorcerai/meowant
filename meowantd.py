@@ -42,8 +42,8 @@ def main():
 
     device = TuyaDevice(cfg)
     sc = SmartClean(
-        idle_seconds=config.get(cfg, "smartclean.idle_seconds", 90),
-        max_wait_seconds=config.get(cfg, "smartclean.max_wait_seconds", 480),
+        idle_seconds=config.get(cfg, "smartclean.idle_seconds", 60),
+        max_wait_seconds=config.get(cfg, "smartclean.max_wait_seconds", 240),
         enabled=config.get(cfg, "smartclean.enabled", True))
     daemon = Daemon(device, conn, sc)
 
@@ -51,6 +51,37 @@ def main():
     daemon.on_event = bus.publish
     alerts = Alerts(bus, notify=make_notify(lambda k: config.get(cfg, k)))
     threading.Thread(target=alerts.run, daemon=True).start()
+
+    endpoint = config.get(cfg, "weekly.llm_endpoint")
+    timeout = config.get(cfg, "weekly.llm_timeout_s", 120)
+    custom_run = None
+    if endpoint:
+        import requests
+        def _custom_run(prompt):
+            resp = requests.post(
+                endpoint,
+                json={"model": "gemma", "messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
+                timeout=timeout
+            )
+            resp.raise_for_status()
+            message = resp.json()["choices"][0]["message"]
+            return message.get("content", "") + " " + message.get("reasoning_content", "")
+        custom_run = _custom_run
+
+    # Weekly per-cat consolidation + statistical gatekeeper (chronic-drift
+    # report). Phase 2 adds shadow-first LLM classifier/hypothesis layer.
+    if config.get(cfg, "weekly.enabled", False):
+        from mw.weekly import WeeklyAnalyst
+        
+        analyst = WeeklyAnalyst(
+            conn, make_notify(lambda k: config.get(cfg, k)),
+            run=custom_run,
+            state_path=config.get(cfg, "weekly.state_path", "weekly_state.json"),
+            interval_days=config.get(cfg, "weekly.interval_days", 7),
+            min_void_n=config.get(cfg, "weekly.min_void_n", 5),
+            shadow=config.get(cfg, "weekly.shadow", True))
+        threading.Thread(target=analyst.run, daemon=True).start()
+        print("weekly-analyst: per-cat 7d consolidation + LLM gatekeeper (shadow: %s)" % analyst.shadow)
 
     cams = config.get(cfg, "cameras", [])
     if cams:
@@ -96,11 +127,11 @@ def main():
         # cross-frame agreement gate only auto-applies UNANIMOUS calls and
         # defers ambiguous visits to human review — the trust channel.
         from mw.autolabel import AutoLabeler, discover_refs
-        from mw.labeler import AgyLabeler
+        from mw.labeler import AgyLabeler, LlamaCppLabeler, FallbackLabeler
         from mw.catfilter import TorchvisionCatFilter
         catfilter = TorchvisionCatFilter()  # shared: cat/no-cat for labels + floor-clear for scatter
         _cats = list(store.gallery_counts(conn).keys())
-        autolabeler = AutoLabeler(conn, AgyLabeler(), discover_refs("gallery", _cats), _cats,
+        autolabeler = AutoLabeler(conn, FallbackLabeler(AgyLabeler(), LlamaCppLabeler()), discover_refs("gallery", _cats), _cats,
                                   catfilter=catfilter)  # drop empties before agy
         threading.Thread(
             target=autolabeler.run,
@@ -112,7 +143,8 @@ def main():
         from mw.elim_notify import EliminationNotifier
         elim_notifier = EliminationNotifier(
             conn, autolabeler, notify=make_notify(lambda k: config.get(cfg, k)),
-            poop_threshold=config.get(cfg, "alerts.poop_threshold", 100))
+            pee_threshold=config.get(cfg, "alerts.pee_threshold", 80),
+            poop_threshold=config.get(cfg, "alerts.poop_threshold", 130))
         threading.Thread(target=elim_notifier.run, daemon=True).start()
         print("elim-notifier: named 'who used the box' alerts (label-on-leave)")
 
@@ -130,17 +162,7 @@ def main():
             threading.Thread(target=canary.run, daemon=True).start()
             print("invariant-canary: raw-vs-attributed elimination check")
 
-        # Weekly per-cat consolidation + statistical gatekeeper (chronic-drift
-        # report). Deterministic (no LLM in Phase 1). Pull-recoverable via /weekly.
-        if config.get(cfg, "weekly.enabled", False):
-            from mw.weekly import WeeklyAnalyst
-            analyst = WeeklyAnalyst(
-                conn, make_notify(lambda k: config.get(cfg, k)),
-                state_path=config.get(cfg, "weekly.state_path", "weekly_state.json"),
-                interval_days=config.get(cfg, "weekly.interval_days", 7),
-                min_void_n=config.get(cfg, "weekly.min_void_n", 5))
-            threading.Thread(target=analyst.run, daemon=True).start()
-            print("weekly-analyst: per-cat 7d consolidation + gatekeeper")
+
 
         # Litter-scatter detector: per-visit floor delta on meowcam3 (pin a clean
         # reference at cat-enter, score post-leave frames) -> 'time to sweep' alert.
@@ -183,6 +205,7 @@ def main():
     from mw.health_watch import HealthWatch, Heartbeat
     hw = HealthWatch(
         conn, make_notify(lambda k: config.get(cfg, k)),
+        run_llm=custom_run,
         no_go_hours=config.get(cfg, "health.no_go_hours", 12),
         digest_hour=config.get(cfg, "health.digest_hour", 9),
         interval=config.get(cfg, "health.check_interval_s", 1800))
@@ -196,53 +219,114 @@ def main():
         print("heartbeat: external dead-man's-switch ping")
 
     # Feeder (Phase 1): local Tuya control + dispense logging + watchdogs.
-    feeder_monitor = None
-    feeder_dev = None
-    if config.get(cfg, "feeder.enabled", False) and config.get(cfg, "feeder.device_id"):
+    feeder_devs = {}
+    feeder_monitors = {}
+    
+    feeders_cfg = config.get(cfg, "feeders", [])
+    if config.get(cfg, "feeder"):  # back-compat
+        f_cfg = config.get(cfg, "feeder")
+        f_cfg["label"] = f_cfg.get("label", "downstairs")
+        feeders_cfg.append(f_cfg)
+        
+    if feeders_cfg:
         from mw.feeder import FeederDevice, FeederMonitor
-        feeder_dev = FeederDevice(config.get(cfg, "feeder"))
-        feeder_monitor = FeederMonitor(
-            feeder_dev, conn, make_notify(lambda k: config.get(cfg, k)),
-            mealtimes=config.get(cfg, "feeder.mealtimes", []),
-            poll_interval_s=config.get(cfg, "feeder.poll_interval_s", 120),
-            miss_grace_minutes=config.get(cfg, "feeder.miss_grace_minutes", 30),
-            offline_minutes=config.get(cfg, "feeder.offline_minutes", 30),
-            low_food_levels=config.get(cfg, "feeder.low_food_levels", ["empty", "low"]))
-        threading.Thread(target=feeder_monitor.run, daemon=True).start()
-        print("feeder: local control + dispense logging + watchdogs")
+        for f_cfg in feeders_cfg:
+            if not f_cfg.get("enabled", True) or not f_cfg.get("device_id"):
+                continue
+            lbl = f_cfg.get("label", "default")
+            f_dev = FeederDevice(f_cfg)
+            f_mon = FeederMonitor(
+                f_dev, conn, make_notify(lambda k: config.get(cfg, k)),
+                mealtimes=f_cfg.get("mealtimes", []),
+                poll_interval_s=f_cfg.get("poll_interval_s", 120),
+                miss_grace_minutes=f_cfg.get("miss_grace_minutes", 30),
+                offline_minutes=f_cfg.get("offline_minutes", 30),
+                low_food_levels=f_cfg.get("low_food_levels", ["empty", "low"]))
+            threading.Thread(target=f_mon.run, daemon=True).start()
+            feeder_devs[lbl] = f_dev
+            feeder_monitors[lbl] = f_mon
+            print(f"feeder '{lbl}': local control + dispense logging + watchdogs")
+
+    if config.get(cfg, "random_probe.enabled", False):
+        from mw.random_probe import RandomProbe
+        probe = RandomProbe(
+            feeder_devs, feeder_monitors,
+            min_hours=config.get(cfg, "random_probe.min_hours", 2.0),
+            max_hours=config.get(cfg, "random_probe.max_hours", 5.0),
+            start_hour=config.get(cfg, "random_probe.start_hour", 8),
+            end_hour=config.get(cfg, "random_probe.end_hour", 22)
+        )
+        threading.Thread(target=probe.run, daemon=True).start()
+        print(f"random-probe: drops 1 portion every {config.get(cfg, 'random_probe.min_hours', 2)}-{config.get(cfg, 'random_probe.max_hours', 5)}h to learn habits")
 
     # Bowl camera (Phase 2): full/empty vision -> refill alert / auto-feed.
-    # Dormant until bowl.enabled + a meowcam5 + a calibrated empty_ref on disk.
     cams = config.get(cfg, "cameras", [])
-    m5 = next((c for c in cams if c["name"] == "meowcam5"), None)
-    bowl_ref = config.get(cfg, "bowl.empty_ref_path", "")
-    if config.get(cfg, "bowl.enabled", False) and m5 and bowl_ref and os.path.exists(bowl_ref):
+    bowls_cfg = config.get(cfg, "bowls", [])
+    if config.get(cfg, "bowl"): # back-compat
+        b_cfg = config.get(cfg, "bowl")
+        b_cfg["location"] = b_cfg.get("location", "downstairs")
+        b_cfg["feeder_label"] = b_cfg.get("feeder_label", "downstairs")
+        bowls_cfg.append(b_cfg)
+        
+    if bowls_cfg:
         from mw.bowl_watch import BowlWatch
+        from mw.bowl_tracker import BowlTracker
         from mw.bowl import DEFAULT_ROI
         from mw.capture import ffmpeg_grab
+        from mw.autolabel import discover_refs
         os.makedirs("gallery/bowl", exist_ok=True)
+        
+        _cats = list(store.gallery_counts(conn).keys())
+        bowl_refs = discover_refs("gallery", _cats)
 
-        def _bowl_grab(url=m5["url"]):
-            try:
-                return ffmpeg_grab(url, "gallery/bowl/latest.jpg")
-            except Exception:
-                return None
+        for b_cfg in bowls_cfg:
+            b_enabled = b_cfg.get("enabled", True)
+            b_cam_name = b_cfg.get("camera")
+            b_ref = b_cfg.get("empty_ref_path", "")
+            cam_conf = next((c for c in cams if c["name"] == b_cam_name), None)
+            
+            if b_enabled and cam_conf and b_ref and os.path.exists(b_ref):
+                loc = b_cfg.get("location", "downstairs")
+                
+                # Bind url locally for lambda
+                def _make_grab(url, loc_name):
+                    def _grab():
+                        try:
+                            return ffmpeg_grab(url, f"gallery/bowl/latest_{loc_name}.jpg")
+                        except Exception:
+                            return None
+                    return _grab
+                
+                auto = b_cfg.get("auto_feed", False)
+                f_label = b_cfg.get("feeder_label", loc)
+                paired_feeder = feeder_devs.get(f_label) if auto else None
+                
+                bw = BowlWatch(
+                    _make_grab(cam_conf["url"], loc), catfilter, conn,
+                    make_notify(lambda k: config.get(cfg, k)),
+                    feeder=paired_feeder,
+                    empty_ref=b_ref,
+                    roi=tuple(b_cfg.get("roi", list(DEFAULT_ROI))),
+                    empty_max=b_cfg.get("empty_max", 5.0),
+                    full_min=b_cfg.get("full_min", 20.0),
+                    poll_interval_s=b_cfg.get("poll_interval_s", 1200),
+                    auto_feed=auto,
+                    auto_feed_portions=b_cfg.get("auto_feed_portions", 1),
+                    auto_feed_max_per_day=b_cfg.get("auto_feed_max_per_day", 4),
+                    location=loc)
+                paired_monitor = feeder_monitors.get(f_label)
+                if paired_monitor:
+                    paired_monitor.bowl_watch = bw
+                threading.Thread(target=bw.run, daemon=True).start()
+                print(f"bowl-watch '{loc}': full/empty vision + refill/auto-feed")
 
-        auto = config.get(cfg, "bowl.auto_feed", False)
-        bw = BowlWatch(
-            _bowl_grab, catfilter, conn,
-            make_notify(lambda k: config.get(cfg, k)),
-            feeder=(feeder_dev if auto and feeder_monitor is not None else None),
-            empty_ref=bowl_ref,
-            roi=tuple(config.get(cfg, "bowl.roi", list(DEFAULT_ROI))),
-            empty_max=config.get(cfg, "bowl.empty_max", 5.0),
-            full_min=config.get(cfg, "bowl.full_min", 20.0),
-            poll_interval_s=config.get(cfg, "bowl.poll_interval_s", 1200),
-            auto_feed=auto,
-            auto_feed_portions=config.get(cfg, "bowl.auto_feed_portions", 1),
-            auto_feed_max_per_day=config.get(cfg, "bowl.auto_feed_max_per_day", 4))
-        threading.Thread(target=bw.run, daemon=True).start()
-        print("bowl-watch: full/empty vision + refill/auto-feed")
+                bt = BowlTracker(
+                    _make_grab(cam_conf["url"], loc + "_tracker"), catfilter, bowl_refs, conn,
+                    make_notify(lambda k: config.get(cfg, k)),
+                    location=loc,
+                    poll_interval_s=config.get(cfg, "bowl_tracker.poll_interval_s", 5))
+                threading.Thread(target=bt.run, daemon=True).start()
+                print(f"bowl-tracker '{loc}': eating session tracking")
 
     # Inbound Telegram commands (/cats /status /health) — allowlisted to the owner
     # chat. Only starts if Telegram creds are configured.
@@ -260,20 +344,35 @@ def main():
             if cid and store.human_attribute_visit(conn, vid, cid):
                 return f"✓ Visit {vid} labeled {cat}"
             return f"⚠️ Couldn't label visit {vid} as {cat}"
-        def _do_feed(dev, monitor, arg):
+        def _do_feed(arg):
             try:
-                n = int(arg) if arg.strip() else 1
+                parts = arg.split()
+                if not parts:
+                    return "Usage: /feed [location] <portions>"
+                
+                if len(parts) >= 2 and not parts[0].isdigit():
+                    lbl = parts[0]
+                    n_str = parts[1]
+                else:
+                    lbl = list(feeder_devs.keys())[0] if feeder_devs else "downstairs"
+                    n_str = parts[0]
+
+                n = int(n_str)
             except ValueError:
-                return "Usage: /feed <portions 1-50>"
+                return "Usage: /feed [location] <portions>"
             n = max(1, min(50, n))
-            if dev.feed(n):
-                monitor.note_manual_feed()       # so the poll labels it 'manual'
-                return f"🍽️ Dispensed {n} portion(s)."
-            return "⚠️ Feed command failed (feeder unreachable?)."
+            
+            dev = feeder_devs.get(lbl)
+            mon = feeder_monitors.get(lbl)
+            if dev and dev.feed(n):
+                if mon: mon.note_manual_feed()
+                return f"🍽️ Dispensed {n} portion(s) to '{lbl}'."
+            return f"⚠️ Feed command failed (feeder '{lbl}' unreachable or not found)."
+            
         bot = TelegramBot(tg_token, tg_chat, {
-            **({"/feed": (lambda arg="": _do_feed(feeder_dev, feeder_monitor, arg)),
-                "/feedstatus": (lambda: report.feed_status_text(conn, feeder_dev.status()))}
-               if feeder_monitor else {}),
+            **({"/feed": (lambda arg="": _do_feed(arg)),
+                "/feedstatus": (lambda: "\n\n".join(f"[{lbl}]\n{report.feed_status_text(conn, dev.status())}" for lbl, dev in feeder_devs.items()))}
+               if feeder_devs else {}),
             "/cats": lambda: report.cat_report(conn),
             "/status": lambda: report.status_report(conn, daemon.state),
             "/health": lambda: report.health_report(conn),

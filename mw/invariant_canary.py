@@ -36,16 +36,31 @@ class InvariantCanary:
         now = self.now()
         after = store._iso(now - self.window_hours * 3600)
         before = store._iso(now - self.grace_hours * 3600)   # skip too-recent visits
-        raw, attributed = store.elimination_attribution_stats(self.conn, after, before)
-        if raw < self.min_sample:
+        framed_raw, attributed, frameless_raw = store.elimination_attribution_stats(self.conn, after, before)
+        
+        errors = []
+        if framed_raw >= self.min_sample:
+            ratio = attributed / framed_raw
+            if ratio < self.min_ratio:
+                errors.append(f"🔬 Attribution canary: only {attributed}/{framed_raw} framed "
+                              f"eliminations got a cat ID ({ratio:.0%}) over the last "
+                              f"{self.window_hours}h — the labeler may be silently dropping "
+                              f"health events")
+                              
+        total_visits = framed_raw + frameless_raw
+        if total_visits >= self.min_sample:
+            frameless_ratio = frameless_raw / total_visits
+            if frameless_ratio > 0.5:  # If more than 50% of visits are frameless
+                errors.append(f"📷 Observability canary: {frameless_raw}/{total_visits} "
+                              f"eliminations were frameless ({frameless_ratio:.0%}) over the last "
+                              f"{self.window_hours}h — severe camera flicker or frame loss")
+                              
+        if errors:
+            return ("bad", "\n".join(errors))
+            
+        if framed_raw < self.min_sample and total_visits < self.min_sample:
             return ("insufficient", None)
-        ratio = attributed / raw
-        if ratio < self.min_ratio:
-            return ("bad",
-                    f"🔬 Attribution canary: only {attributed}/{raw} recent "
-                    f"eliminations got a cat ID ({ratio:.0%}) over the last "
-                    f"{self.window_hours}h — the labeler may be silently dropping "
-                    f"health events")
+            
         return ("ok", None)
 
     def run_once(self):

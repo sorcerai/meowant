@@ -8,7 +8,7 @@ def test_cold_start_does_not_fire_without_presence():
 
 
 def test_fires_after_idle():
-    sc = SmartClean()  # idle=90 default
+    sc = SmartClean(idle_seconds=90)  # explicitly set to 90 for test
     assert sc.update({"24": "cat_get_in"}, 0) is False   # arms
     assert sc.update({"24": "standby"}, 10) is False     # standby_since=10
     assert sc.update({"24": "standby"}, 99) is False     # 89s < 90

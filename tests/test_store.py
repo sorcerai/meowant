@@ -243,6 +243,8 @@ def test_elimination_attribution_stats_counts_raw_and_attributed(tmp_path):
     def _elim(enter, attributed):
         vid = store.open_visit(conn, enter)            # enter_ts = _iso(enter)
         store.mark_elimination(conn, vid, 50)
+        # Add a dummy capture so the visit counts as 'framed'
+        conn.execute("INSERT INTO captures (visit_id, camera, ts, path) VALUES (?, 'c', ?, 'p')", (vid, enter))
         if attributed:
             store.set_visit_identity(conn, vid, cid, 0.9)
         return vid
@@ -256,7 +258,7 @@ def test_elimination_attribution_stats_counts_raw_and_attributed(tmp_path):
 
     after = store._iso(T - 1000)
     before = store._iso(T)
-    raw, attributed = store.elimination_attribution_stats(conn, after, before)
+    raw, attributed, frameless = store.elimination_attribution_stats(conn, after, before)
     assert raw == 3
     assert attributed == 2
 
@@ -269,9 +271,10 @@ def test_elimination_attribution_stats_respects_window_bounds(tmp_path):
     for off in (-5000, -100, -10):    # one too old, one in-window, one too recent
         vid = store.open_visit(conn, T + off)
         store.mark_elimination(conn, vid, 50)
+        conn.execute("INSERT INTO captures (visit_id, camera, ts, path) VALUES (?, 'c', ?, 'p')", (vid, T+off))
     after = store._iso(T - 1000)      # excludes the -5000 one
     before = store._iso(T - 50)       # excludes the -10 one
-    raw, attributed = store.elimination_attribution_stats(conn, after, before)
+    raw, attributed, frameless = store.elimination_attribution_stats(conn, after, before)
     assert raw == 1
     assert attributed == 0
 

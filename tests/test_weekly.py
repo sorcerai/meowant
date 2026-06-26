@@ -216,7 +216,8 @@ def test_weekly_analyst_not_due_is_noop(tmp_path):
     sp = str(tmp_path / "wk.json")
     sent = []
     a = weekly.WeeklyAnalyst(conn, lambda m: sent.append(m) or True,
-                             now_fn=lambda: 1000.0, state_path=sp)
+                             now_fn=lambda: 1000.0, state_path=sp,
+                             run=lambda p: '{"classifier": {}, "hypotheses": []}')
     a._save_state({"last_run": 1000.0})           # just ran
     assert a.run_once(1000.0 + 3600) is False      # 1h later -> not due
     assert sent == [] and store.latest_weekly_report(conn) is None
@@ -230,11 +231,12 @@ def test_weekly_analyst_due_persists_and_notifies(tmp_path):
     sp = str(tmp_path / "wk.json")
     sent = []
     a = weekly.WeeklyAnalyst(conn, lambda m: sent.append(m) or True,
-                             now_fn=lambda: now, state_path=sp)
+                             now_fn=lambda: now, state_path=sp,
+                             run=lambda p: '{"classifier": {}, "hypotheses": [], "narrative": "test"}')
     assert a.run_once(now) is True                  # no prior state -> due
     assert len(sent) == 1 and "Ucok" in sent[0]
     rep = store.latest_weekly_report(conn)
-    assert rep is not None and rep["narrative_json"] is None
+    assert rep is not None and rep["narrative_json"] is not None
     assert a._load_state().get("last_run") == now   # stamped
 
 
@@ -243,7 +245,8 @@ def test_weekly_analyst_stamps_even_if_notify_fails(tmp_path):
     now = datetime(2026, 6, 23, 12, 0, 0).timestamp()
     sp = str(tmp_path / "wk.json")
     a = weekly.WeeklyAnalyst(conn, lambda m: False,    # delivery fails
-                             now_fn=lambda: now, state_path=sp)
+                             now_fn=lambda: now, state_path=sp,
+                             run=lambda p: '{"classifier": {}, "hypotheses": []}')
     assert a.run_once(now) is True
     assert a._load_state().get("last_run") == now      # week still recorded (pull-recoverable)
     assert store.latest_weekly_report(conn) is not None
@@ -273,9 +276,48 @@ def test_weekly_analyst_same_period_prior_not_persistence_evidence(tmp_path):
         None, ts=now - 60)
     sp = str(tmp_path / "wk.json")
     a = weekly.WeeklyAnalyst(conn, lambda m: True,
-                             now_fn=lambda: now, state_path=sp)
+                             now_fn=lambda: now, state_path=sp,
+                             run=lambda p: '{"classifier": {}, "hypotheses": []}')
     assert a.run_once(now) is True
     rep = store.latest_weekly_report(conn)             # the report run_once just wrote
     findings = json.loads(rep["findings_json"])
     freq = [x for x in findings if x["cat"] == "Ucok" and x["metric"] == "frequency"][0]
     assert freq["severity"] == "watch"                 # NOT escalated to drift
+
+def test_validate_llm_output():
+    findings = [{"cat": "Ucok", "metric": "frequency"}]
+    
+    # Valid output
+    valid = {
+        "classifier": {"Ucok": {"severity": "watch", "slugs": ["gaps-widening"]}},
+        "hypotheses": [{"text": "perhaps he is older", "evidence_keys": ["Ucok:frequency"]}]
+    }
+    assert weekly.validate_llm_output(valid, findings) is True
+    
+    # Invalid: Contains numbers
+    invalid_nums = {
+        "classifier": {"Ucok": {"severity": "watch", "slugs": ["gaps-widening"]}},
+        "hypotheses": [{"text": "he is 5 years old", "evidence_keys": ["Ucok:frequency"]}]
+    }
+    assert weekly.validate_llm_output(invalid_nums, findings) is False
+    
+    # Invalid: Forbidden words
+    invalid_words = {
+        "classifier": {"Ucok": {"severity": "watch", "slugs": ["gaps-widening"]}},
+        "hypotheses": [{"text": "this indicates sickness", "evidence_keys": ["Ucok:frequency"]}]
+    }
+    assert weekly.validate_llm_output(invalid_words, findings) is False
+    
+    # Invalid: Bad slug
+    invalid_slug = {
+        "classifier": {"Ucok": {"severity": "watch", "slugs": ["made-up-slug"]}},
+        "hypotheses": [{"text": "perhaps", "evidence_keys": ["Ucok:frequency"]}]
+    }
+    assert weekly.validate_llm_output(invalid_slug, findings) is False
+    
+    # Invalid: Bad evidence key
+    invalid_evidence = {
+        "classifier": {"Ucok": {"severity": "watch", "slugs": ["gaps-widening"]}},
+        "hypotheses": [{"text": "perhaps", "evidence_keys": ["wrong:key"]}]
+    }
+    assert weekly.validate_llm_output(invalid_evidence, findings) is False

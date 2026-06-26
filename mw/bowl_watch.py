@@ -45,7 +45,7 @@ class BowlWatch:
                  confirm_empty=agy_bowl_empty, now_fn=time.time, *,
                  empty_ref, roi=bowl.DEFAULT_ROI, empty_max=5.0, full_min=20.0,
                  delta=22, poll_interval_s=1200, auto_feed=False,
-                 auto_feed_portions=1, auto_feed_max_per_day=4):
+                 auto_feed_portions=1, auto_feed_max_per_day=4, location="downstairs"):
         self.grab = grab
         self.catfilter = catfilter
         self.conn = conn
@@ -62,7 +62,8 @@ class BowlWatch:
         self.auto_feed = auto_feed
         self.auto_feed_portions = auto_feed_portions
         self.auto_feed_max_per_day = auto_feed_max_per_day
-        self._prev_state = store.last_bowl_state(conn)   # resume across restarts
+        self.location = location
+        self._prev_state = store.last_bowl_state(conn, location=self.location)   # resume across restarts
         self._empty_streak = 0
         self._empty_alerted = False
 
@@ -72,8 +73,22 @@ class BowlWatch:
         self._empty_streak = 0
         self._empty_alerted = False
         if state != self._prev_state:
-            store.log_bowl_event(self.conn, state, "vision", ts=self.now())
+            store.log_bowl_event(self.conn, state, "vision", location=self.location, ts=self.now())
             self._prev_state = state
+
+    def check_fullness(self):
+        """Take an immediate grab and return (changed_pct, state). Returns (None, None) if blocked or unreadable."""
+        path = self.grab()
+        if not path or not self.catfilter.is_clear(path):
+            return None, None
+        pct = bowl.changed_pct(path, self.empty_ref, self.roi, self.delta)
+        if pct is None:
+            return None, None
+        if pct <= self.empty_max:
+            return pct, bowl.EMPTY
+        if pct >= self.full_min:
+            return pct, bowl.FULL
+        return pct, bowl.SOME
 
     def poll_once(self):
         path = self.grab()
@@ -101,28 +116,29 @@ class BowlWatch:
     def _on_empty(self):
         now = self.now()
         if self._prev_state != bowl.EMPTY:          # transition: log consumption once
-            lf = store.last_feed_event_ts(self.conn)
+            f_lbl = self.feeder.label if self.feeder else None
+            lf = store.last_feed_event_ts(self.conn, feeder=f_lbl)
             secs = int(now - lf) if lf is not None else None
             store.log_bowl_event(self.conn, bowl.EMPTY, "vision",
-                                 secs_since_feed=secs, ts=now)
+                                 secs_since_feed=secs, location=self.location, ts=now)
             self._prev_state = bowl.EMPTY
         if self._empty_alerted:
             return                                  # one action per empty episode
         if self.auto_feed and self.feeder is not None:
-            if store.auto_feeds_today(self.conn) >= self.auto_feed_max_per_day:
-                if self.notify(f"\U0001f514 Bowl empty — auto-feed daily limit "
+            if store.auto_feeds_today(self.conn, location=self.location) >= self.auto_feed_max_per_day:
+                if self.notify(f"\U0001f514 Bowl '{self.location}' empty — auto-feed daily limit "
                                f"({self.auto_feed_max_per_day}) reached; refill "
                                f"manually.") is not False:
                     self._empty_alerted = True
             elif self.feeder.feed(self.auto_feed_portions):
-                store.log_bowl_event(self.conn, bowl.EMPTY, "auto_feed")
-                if self.notify(f"\U0001f37d️ Bowl was empty — auto-fed "
+                store.log_bowl_event(self.conn, bowl.EMPTY, "auto_feed", location=self.location)
+                if self.notify(f"\U0001f37d️ Bowl '{self.location}' was empty — auto-fed "
                                f"{self.auto_feed_portions} portion(s).") is not False:
                     self._empty_alerted = True
             else:
-                self.notify("⚠️ Bowl empty + auto-feed FAILED (feeder unreachable?).")
+                self.notify(f"⚠️ Bowl '{self.location}' empty + auto-feed FAILED (feeder unreachable?).")
         else:
-            if self.notify("\U0001f514 Bowl empty — /feed to refill?") is not False:
+            if self.notify(f"\U0001f514 Bowl '{self.location}' empty — /feed {self.location} to refill?") is not False:
                 self._empty_alerted = True
 
     def run(self):

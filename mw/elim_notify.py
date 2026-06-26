@@ -10,12 +10,12 @@ import time
 from mw import store
 from mw.decode import classify_waste
 
-_WASTE_MARK = {"pee": " — pee 💧", "poop": " — poop 💩"}
+_WASTE_MARK = {"pee": " — pee 💧", "poop": " — poop 💩", "uncertain": " — uncertain ❓"}
 
 
 class EliminationNotifier:
     def __init__(self, conn, labeler, notify, now_fn=time.time,
-                 settle_s=15, interval=30, sample=5, ask_who=None, poop_threshold=100):
+                 settle_s=15, interval=30, sample=5, ask_who=None, pee_threshold=80, poop_threshold=130):
         self.conn = conn
         self.labeler = labeler            # has .label_visit(vid, sample=...)
         self.notify = notify
@@ -24,10 +24,11 @@ class EliminationNotifier:
         self.interval = interval
         self.sample = sample              # frames to label for a FAST id (not all ~36)
         self.ask_who = ask_who            # optional (vid, paths, when, waste) -> None
-        self.poop_threshold = poop_threshold  # dp102 use_record split: pee < t <= poop
+        self.pee_threshold = pee_threshold
+        self.poop_threshold = poop_threshold
 
     def _waste_mark(self, visit):
-        return _WASTE_MARK.get(classify_waste(visit.get("use_record"), self.poop_threshold), "")
+        return _WASTE_MARK.get(classify_waste(visit.get("use_record"), self.pee_threshold, self.poop_threshold), "")
 
     def _alert_text(self, visit):
         cat = store.cat_name_by_id(self.conn, visit["cat_id"]) if visit["cat_id"] else None

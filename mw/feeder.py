@@ -1,9 +1,6 @@
-"""PLAF103 feeder: local Tuya control + the dp-118 feed-record decode.
+"""Feeder module: local Tuya control for multiple feeders.
 
-Confirmed against the live device (a real test feed). Local control only — the
-cloud `manual_feed` returns 1109. NON-persistent socket: a persistent socket
-returns partial dp pushes; a fresh status() returns the full dp set we need
-(food_level + the dp-118 feed record).
+Supports device-specific DP profiles (PLAF103 vs Andoll).
 """
 import base64
 import sys
@@ -12,15 +9,8 @@ import time
 from datetime import datetime
 from mw import store
 
-DP_MANUAL_FEED = 3        # write-only: set_value(3, portions) dispenses
-DP_FEED_STATE = "4"       # standby | feeding | feed_end
-DP_FOOD_LEVEL = "108"     # hopper enum (full | ...)
-DP_FEED_RECORD = "118"    # base64 last-feed record (persists)
-
-
-def decode_feed_record(b64):
-    """Decode a dp-118 feed record -> {"ts": epoch, "portions": int}, or None.
-    Format (>=8 bytes): [year_hi, year_lo, month, day, hour, min, sec, portions, ...]."""
+def decode_plaf103_record(b64):
+    """Decode a dp-118 feed record -> {"ts": epoch, "portions": int}, or None."""
     if not b64:
         return None
     try:
@@ -36,6 +26,20 @@ def decode_feed_record(b64):
         return None
     return {"ts": dt.timestamp(), "portions": b[7]}
 
+PROFILES = {
+    "PLAF103": {
+        "manual_feed": 3,
+        "feed_state": "4",
+        "food_level": "108",
+        "feed_record": "118",
+    },
+    "Andoll": {
+        "manual_feed": 3,
+        "feed_state": "4",
+        "food_level": "10",  # Guessing 10 or none
+        "feed_record": "14",
+    }
+}
 
 class FeederDevice:
     def __init__(self, cfg):
@@ -44,6 +48,10 @@ class FeederDevice:
         self._cfg = cfg
         self._dev = None
         self._tinytuya = tinytuya
+        self.label = cfg.get("label", "default")
+        self.profile_name = cfg.get("dp_profile", "PLAF103")
+        self.profile = PROFILES.get(self.profile_name, PROFILES["PLAF103"])
+        self._last_raw_record = None
 
     def _device(self):
         if self._dev is None:
@@ -60,11 +68,22 @@ class FeederDevice:
                     data = self._device().status()
                     dps = data.get("dps", {}) if isinstance(data, dict) else {}
                     if dps:
-                        rec = dps.get(DP_FEED_RECORD)
+                        rec = dps.get(self.profile["feed_record"])
+                        last_feed = None
+                        if rec is not None:
+                            if self.profile_name == "PLAF103":
+                                last_feed = decode_plaf103_record(rec)
+                            else:
+                                # For Andoll, rec is an integer (portions). We emit a new feed
+                                # only if the record value changes. (Imperfect for consecutive identical feeds).
+                                if rec != self._last_raw_record and self._last_raw_record is not None:
+                                    last_feed = {"ts": time.time(), "portions": rec}
+                                self._last_raw_record = rec
+                                
                         return {
-                            "feed_state": dps.get(DP_FEED_STATE),
-                            "food_level": dps.get(DP_FOOD_LEVEL),
-                            "last_feed": decode_feed_record(rec) if rec else None,
+                            "feed_state": dps.get(self.profile["feed_state"]),
+                            "food_level": dps.get(self.profile["food_level"]),
+                            "last_feed": last_feed,
                             "online": True,
                         }
                 except Exception:
@@ -74,40 +93,20 @@ class FeederDevice:
     def feed(self, portions):
         with self._lock:
             try:
-                self._device().set_value(DP_MANUAL_FEED, int(portions))
+                dp = self.profile["manual_feed"]
+                self._device().set_value(dp, int(portions))
                 return True
             except Exception as e:
-                print(f"[feeder] feed({portions}) failed: {e}", file=sys.stderr)
+                print(f"[feeder {self.label}] feed({portions}) failed: {e}", file=sys.stderr)
                 self._dev = None
                 return False
 
 
-class FakeFeederDevice:
-    """Replays status() snapshots; records feed() portions in .fed."""
-    def __init__(self, snapshots):
-        self._snaps = list(snapshots)
-        self._i = 0
-        self.fed = []
-
-    def status(self):
-        if self._i < len(self._snaps):
-            s = self._snaps[self._i]
-            self._i += 1
-            return dict(s)
-        return dict(self._snaps[-1]) if self._snaps else {"online": False}
-
-    def feed(self, portions):
-        self.fed.append(portions)
-        return True
-
-
 class FeederMonitor:
-    """Polls the feeder: logs each new dp-118 feed, and runs latched fail-loud
-    watchdogs (missed scheduled drop, empty hopper, unreachable). Source of a feed
-    is 'manual' if a /feed was issued within manual_window_s, else 'scheduled'."""
+    """Polls the feeder: logs each new feed, and runs watchdogs."""
     def __init__(self, device, conn, notify, mealtimes=(), now_fn=time.time,
-                 poll_interval_s=120, miss_grace_minutes=30, offline_minutes=30,
-                 low_food_levels=("empty", "low"), manual_window_s=600):
+                 poll_interval_s=120, miss_grace_minutes=30, miss_lead_minutes=5,
+                 offline_minutes=30, low_food_levels=("empty", "low"), manual_window_s=600):
         self.device = device
         self.conn = conn
         self.notify = notify
@@ -115,18 +114,24 @@ class FeederMonitor:
         self.now = now_fn
         self.poll_interval_s = poll_interval_s
         self.miss_grace_minutes = miss_grace_minutes
+        self.miss_lead_minutes = miss_lead_minutes
         self.offline_minutes = offline_minutes
         self.low_food_levels = set(low_food_levels)
         self.manual_window_s = manual_window_s
-        self._last_logged_feed_ts = store.last_feed_event_ts(conn)  # resume across restarts
+        
+        self.label = self.device.label
+        self._last_logged_feed_ts = store.last_feed_event_ts(conn, feeder=self.label)
         self._offline_since = None
         self._offline_alerted = False
         self._hopper_alerted = False
         self._missed_alerted = set()        # {(date_iso, "HH:MM")}
         self._expect_manual_until = 0
 
+        self.bowl_watch = None
+        self._preshots = {}                 # hhmm -> (ts, changed_pct)
+        self._last_feed_state = None
+
     def note_manual_feed(self):
-        """Call right after a successful /feed so the next detected feed is 'manual'."""
         self._expect_manual_until = self.now() + self.manual_window_s
 
     def _fire(self, msg, latch_attr):
@@ -145,19 +150,29 @@ class FeederMonitor:
             self._offline_since = now
         elif (not self._offline_alerted
               and (now - self._offline_since) >= self.offline_minutes * 60):
-            if self.notify(f"🍽️ Feeder unreachable for {self.offline_minutes}min+ "
+            if self.notify(f"🍽️ Feeder '{self.label}' unreachable for {self.offline_minutes}min+ "
                            f"— can't confirm feeding") is not False:
                 self._offline_alerted = True
 
-    def _detect_dispense(self, last_feed):
+    def _detect_dispense(self, st):
+        last_feed = st.get("last_feed")
+        feed_state = st.get("feed_state")
+        now = self.now()
+        source = "manual" if now <= self._expect_manual_until else "scheduled"
+
+        if feed_state == "feeding" and self._last_feed_state != "feeding":
+            store.log_feed_event(self.conn, 0, source, feeder=self.label, ts=now)
+            self._last_logged_feed_ts = now
+            if source == "manual":
+                self._expect_manual_until = 0
+        self._last_feed_state = feed_state
+
         if not last_feed or last_feed.get("ts") is None:
             return
         ts = last_feed["ts"]
-        # +1s guard so an equal stored ts isn't re-logged (float round-trip slack)
-        if self._last_logged_feed_ts is not None and ts <= self._last_logged_feed_ts + 1:
+        if self._last_logged_feed_ts is not None and ts <= self._last_logged_feed_ts + 60:
             return
-        source = "manual" if self.now() <= self._expect_manual_until else "scheduled"
-        store.log_feed_event(self.conn, last_feed.get("portions", 0), source, ts=ts)
+        store.log_feed_event(self.conn, last_feed.get("portions", 0), source, feeder=self.label, ts=ts)
         self._last_logged_feed_ts = ts
         if source == "manual":
             self._expect_manual_until = 0
@@ -165,9 +180,12 @@ class FeederMonitor:
     def _check_hopper(self, food_level):
         if food_level is None:
             return
+        # If food_level is an integer (e.g. some percentage), skip the string comparison
+        if isinstance(food_level, int):
+            return
+            
         if food_level in self.low_food_levels:
-            self._fire(f"🍽️ Feeder hopper {food_level} — refill soon "
-                       f"(cats will run out)", "_hopper_alerted")
+            self._fire(f"🍽️ Feeder '{self.label}' hopper {food_level} — refill soon", "_hopper_alerted")
         else:
             self._hopper_alerted = False     # back to full -> re-arm
 
@@ -183,21 +201,32 @@ class FeederMonitor:
                 continue
             h, m = (int(x) for x in hhmm.split(":"))
             meal = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
+            start = meal - (self.miss_lead_minutes * 60)
             deadline = meal + self.miss_grace_minutes * 60
             if now < deadline:
                 continue                     # window still open
-            if store.feed_in_window(self.conn, meal, deadline):
+            
+            has_feed = store.feed_in_window(self.conn, start, deadline, feeder=self.label)
+            if not has_feed and self.bowl_watch and hhmm in self._preshots:
+                post_pct, _ = self.bowl_watch.check_fullness()
+                pre_pct = self._preshots[hhmm][1]
+                if post_pct is not None and post_pct > pre_pct + 3.0:
+                    store.log_feed_event(self.conn, 0, "scheduled", feeder=self.label, ts=meal)
+                    has_feed = True
+            
+            if has_feed:
                 self._missed_alerted.add(key)            # satisfied
-            elif self.notify(f"🚨 Feeder MISSED the {hhmm} drop (no dispense by "
+            elif self.notify(f"🚨 Feeder '{self.label}' MISSED the {hhmm} drop (no dispense by "
                              f"+{self.miss_grace_minutes}min) — check the feeder") is not False:
+                store.log_incident(self.conn, "missed_feed", {"mealtime": hhmm, "feeder": self.label}, "escalated", "failed", "No feed or bowl-rise detected in window")
                 self._missed_alerted.add(key)
 
     def poll_once(self):
         st = self.device.status()
         self._check_online(bool(st.get("online")))
         if not st.get("online"):
-            return                           # can't trust other signals when offline
-        self._detect_dispense(st.get("last_feed"))
+            return
+        self._detect_dispense(st)
         self._check_hopper(st.get("food_level"))
         self._check_missed_drops()
 
@@ -205,6 +234,28 @@ class FeederMonitor:
         while True:
             try:
                 self.poll_once()
-            except Exception as e:           # never let the feeder thread die
-                print(f"[feeder-monitor] error: {e}", file=sys.stderr)
-            time.sleep(self.poll_interval_s)
+            except Exception as e:
+                print(f"[feeder-monitor {self.label}] error: {e}", file=sys.stderr)
+            
+            sleep_s = self.poll_interval_s
+            now = self.now()
+            lt = time.localtime(now)
+            if self.mealtimes:
+                for hhmm in self.mealtimes:
+                    h, m = (int(x) for x in hhmm.split(":"))
+                    meal = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
+                    start = meal - (self.miss_lead_minutes * 60)
+                    deadline = meal + (self.miss_grace_minutes * 60)
+                    if start <= now <= deadline:
+                        # Fast polling window
+                        sleep_s = 3
+                        # Take pre-shot if we haven't
+                        if self.bowl_watch and hhmm not in self._preshots:
+                            pct, _ = self.bowl_watch.check_fullness()
+                            if pct is not None:
+                                self._preshots[hhmm] = (now, pct)
+                        break
+                    elif now > deadline and hhmm in self._preshots:
+                        del self._preshots[hhmm]
+
+            time.sleep(sleep_s)

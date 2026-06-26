@@ -49,17 +49,6 @@ class DeadManSwitch:
         return (s <= cur < e) if s <= e else (cur >= s or cur < e)
 
     def check_no_go(self):
-        ts = store.last_elimination_ts(self.conn)
-        if ts is None:
-            return None
-        now = self.now()
-        if self._in_quiet(now):
-            return None                       # don't alarm overnight; recheck after quiet
-        hours = (now - datetime.fromisoformat(ts).timestamp()) / 3600.0
-        if hours >= self.no_go_hours:
-            since = ts[5:16].replace("T", " ")
-            return (f"🚨 DEAD-MAN: no litter box use in {hours:.0f}h (since {since}) "
-                    f"— check on the cats")
         return None
 
     def check_liveness(self):
@@ -83,19 +72,37 @@ class DeadManSwitch:
         for s in store.sessions(self.conn):
             if not s["eliminated"] or not s["cat"]:
                 continue
+            if s["cat"] == "Garfield":
+                if s["use_record"] is None or s["duration_s"] <= 40:
+                    continue
             t = datetime.fromisoformat(s["enter_ts"]).timestamp()
             latest[s["cat"]] = max(latest.get(s["cat"], 0), t)
         if not latest:
             return []
+            
         most_recent_any = max(latest.values())
+        if (now - most_recent_any) / 3600.0 >= 8:
+            return []
+
+        THRESHOLDS = {"Ucok": 8, "Ella": 24, "Garfield": 24}
+        in_quiet = self._in_quiet(now)
         out = []
-        for cat, t in latest.items():
+
+        for cat, limit in THRESHOLDS.items():
+            t = latest.get(cat)
+            if not t:
+                continue
             hours = (now - t) / 3600.0
-            # only flag if the SYSTEM is clearly working (someone went recently) but
-            # THIS cat is silent — avoids firing during a global quiet/outage period.
-            if hours >= self.per_cat_hours and (now - most_recent_any) / 3600.0 < self.per_cat_hours:
+            
+            if hours >= limit:
+                if cat == "Ucok":
+                    if not in_quiet: # daytime = tolerant
+                        continue
+                else:
+                    if in_quiet:     # don't alarm overnight for others
+                        continue
                 out.append((cat, f"🚨 DEAD-MAN: {cat} hasn't used the box in {hours:.0f}h "
-                                 f"(others have) — check on {cat}"))
+                                 f"— check on {cat}"))
         return out
 
     def _load_state(self):
@@ -138,8 +145,7 @@ class DeadManSwitch:
         # Each check yields (suffix, msg) pairs; suffix=None for whole-system checks
         # (latch key stays the base), or a discriminator (the cat name) so per-cat
         # alerts latch independently — otherwise a 2nd silent cat never alerts.
-        for base, fn in (("no_go", lambda: [(None, self.check_no_go())]),
-                         ("liveness", lambda: [(None, self.check_liveness())]),
+        for base, fn in (("liveness", lambda: [(None, self.check_liveness())]),
                          ("per_cat", self.check_per_cat)):
             try:
                 for suffix, msg in fn():

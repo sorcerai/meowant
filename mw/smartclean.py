@@ -9,7 +9,7 @@ re-entry starvation). Only ever fires while the cat is NOT present (standby).
 
 
 class SmartClean:
-    def __init__(self, idle_seconds=90, max_wait_seconds=480, enabled=True):
+    def __init__(self, idle_seconds=60, max_wait_seconds=240, enabled=True):
         self.idle = idle_seconds
         self.max_wait = max_wait_seconds
         self.enabled = enabled

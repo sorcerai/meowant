@@ -1,17 +1,33 @@
-"""Feeder device: dp-118 feed-record decode + local control wrapper."""
+"""Feeder device tests."""
 import base64
 from datetime import datetime
 
-from mw.feeder import decode_feed_record, FakeFeederDevice
+from mw.feeder import decode_plaf103_record, FeederMonitor
 from mw import store
-from mw.feeder import FeederMonitor
 
 T = 1_000_000.0
+
+class FakeFeederDevice:
+    def __init__(self, snaps):
+        self._snaps = snaps
+        self._i = 0
+        self.fed = []
+        self.label = "test_feeder"
+        self.profile = "PLAF103"
+    
+    def status(self):
+        s = self._snaps[self._i]
+        self._i = min(len(self._snaps) - 1, self._i + 1)
+        return s
+    
+    def feed(self, portions):
+        self.fed.append(portions)
+        return True
 
 
 def test_decode_feed_record_matches_live_sample():
     # the confirmed live record: 2026-06-22 22:35:40, 1 portion
-    rec = decode_feed_record("B+oGFhYjKAECAA==")
+    rec = decode_plaf103_record("B+oGFhYjKAECAA==")
     assert rec is not None
     assert rec["portions"] == 1
     expect = datetime(2026, 6, 22, 22, 35, 40).timestamp()
@@ -19,12 +35,12 @@ def test_decode_feed_record_matches_live_sample():
 
 
 def test_decode_feed_record_rejects_garbage_and_empty():
-    assert decode_feed_record("AA==") is None        # 1 byte, too short
-    assert decode_feed_record("") is None
-    assert decode_feed_record("not base64!!") is None
+    assert decode_plaf103_record("AA==") is None        # 1 byte, too short
+    assert decode_plaf103_record("") is None
+    assert decode_plaf103_record("not base64!!") is None
     # invalid calendar date (month 13) -> None, not a crash
     bad = base64.b64encode(bytes([7, 234, 13, 40, 99, 99, 99, 1, 0, 0])).decode()
-    assert decode_feed_record(bad) is None
+    assert decode_plaf103_record(bad) is None
 
 
 def test_fake_feeder_device_replays_and_records():
@@ -48,8 +64,8 @@ def _db(tmp_path):
 def test_new_feed_record_is_logged_once(tmp_path):
     conn = _db(tmp_path)
     dev = FakeFeederDevice([
-        {"online": True, "food_level": "full", "last_feed": {"ts": T, "portions": 2}},
-        {"online": True, "food_level": "full", "last_feed": {"ts": T, "portions": 2}},
+        {"online": True, "food_level": "full", "last_feed": {"ts": T, "portions": 2}, "feed_state": "standby"},
+        {"online": True, "food_level": "full", "last_feed": {"ts": T, "portions": 2}, "feed_state": "standby"},
     ])
     m = FeederMonitor(dev, conn, notify=lambda x: None, now_fn=lambda: T + 5)
     m.poll_once()
@@ -62,7 +78,7 @@ def test_new_feed_record_is_logged_once(tmp_path):
 def test_manual_feed_is_labelled_when_expected(tmp_path):
     conn = _db(tmp_path)
     dev = FakeFeederDevice([
-        {"online": True, "food_level": "full", "last_feed": {"ts": T, "portions": 1}},
+        {"online": True, "food_level": "full", "last_feed": {"ts": T, "portions": 1}, "feed_state": "standby"},
     ])
     m = FeederMonitor(dev, conn, notify=lambda x: None, now_fn=lambda: T + 5)
     m.note_manual_feed()                             # we just commanded a /feed
@@ -128,7 +144,7 @@ def test_missed_drop_silent_when_feed_landed(tmp_path):
     import time as _t
     lt = _t.localtime(T)
     seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
-    store.log_feed_event(conn, 2, "scheduled", ts=seven + 60)   # fed at 07:01
+    store.log_feed_event(conn, 2, "scheduled", ts=seven + 60, feeder="test_feeder")   # fed at 07:01
     dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
     msgs = []
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: seven + 31 * 60,

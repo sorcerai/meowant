@@ -4,49 +4,63 @@ from mw.health_watch import HealthWatch
 
 def _conn(tmp_path):
     conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
-    store.seed_cats(conn, ["Ucok"])
+    store.seed_cats(conn, ["Ucok", "Garfield", "Ella"])
     return conn
 
 
-def _elim(conn, ts):
-    v = store.open_visit(conn, ts); store.mark_elimination(conn, v, 55)
-    store.close_visit(conn, v, ts + 60, 60)
+def _elim(conn, ts, cat="Ucok", duration=60, use_record=60):
+    v = store.open_visit(conn, ts); store.mark_elimination(conn, v, use_record)
+    store.close_visit(conn, v, ts + duration, duration)
+    if cat:
+        store.set_visit_identity(conn, v, store.cat_id_by_name(conn, cat), 1.0)
     return v
 
 
 def test_no_go_alarm_fires_once_then_latches(tmp_path):
     conn = _conn(tmp_path)
-    _elim(conn, 1000.0)                       # last use at t=1000
+    _elim(conn, 1000.0, cat="Ella")           # last use at t=1000
     sent = []
-    now = {"t": 1000.0 + 13 * 3600}           # 13h later (> 12h)
-    hw = HealthWatch(conn, sent.append, now_fn=lambda: now["t"],
-                     no_go_hours=12, digest_hour=99)   # digest_hour=99 disables digest
+    # simulate nighttime (03:00) so Ucok doesn't suppress, or just test Ella (24h limit)
+    now = {"t": 1000.0 + 25 * 3600}           # 25h later (> 24h)
+    
+    # We must ensure there is a recent visit by SOMEONE, otherwise the 8h system check suppresses it!
+    # Wait, the threshold for system check is 8h!
+    # If nobody goes for 8h, it's suppressed.
+    # So we need someone else to go recently!
+    _elim(conn, now["t"] - 3600, cat="Garfield")  # Garfield went 1h ago
+    
+    hw = HealthWatch(conn, sent.append, now_fn=lambda: now["t"], digest_hour=99)
     hw.run_once(); hw.run_once()              # two passes
     nogo = [m for m in sent if "No litter box use" in m]
     assert len(nogo) == 1                     # latched: only one alarm
+    assert "Ella" in nogo[0]
 
 
 def test_no_go_rearms_after_new_use(tmp_path):
     conn = _conn(tmp_path)
-    _elim(conn, 1000.0)
+    _elim(conn, 1000.0, cat="Ella")
     sent = []
-    now = {"t": 1000.0 + 13 * 3600}
-    hw = HealthWatch(conn, sent.append, now_fn=lambda: now["t"],
-                     no_go_hours=12, digest_hour=99)
+    now = {"t": 1000.0 + 25 * 3600}
+    _elim(conn, now["t"] - 3600, cat="Garfield")
+    
+    hw = HealthWatch(conn, sent.append, now_fn=lambda: now["t"], digest_hour=99)
     hw.run_once()                             # alarm 1
-    _elim(conn, now["t"])                     # a fresh use clears it
+    assert len([m for m in sent if "No litter box use" in m]) == 1
+
+    _elim(conn, now["t"], cat="Ella")         # a fresh use clears it
     hw.run_once()                             # under threshold -> re-arm, no alarm
-    now["t"] += 13 * 3600                     # quiet again > 12h
+    
+    now["t"] += 25 * 3600                     # quiet again > 24h
+    _elim(conn, now["t"] - 3600, cat="Garfield")
     hw.run_once()                             # alarm 2
     assert len([m for m in sent if "No litter box use" in m]) == 2
 
 
 def test_no_alarm_when_recent(tmp_path):
     conn = _conn(tmp_path)
-    _elim(conn, 1000.0)
+    _elim(conn, 1000.0, cat="Ella")
     sent = []
-    hw = HealthWatch(conn, sent.append, now_fn=lambda: 1000.0 + 3600,  # 1h
-                     no_go_hours=12, digest_hour=99)
+    hw = HealthWatch(conn, sent.append, now_fn=lambda: 1000.0 + 3600, digest_hour=99)
     hw.run_once()
     assert [m for m in sent if "No litter box use" in m] == []
 
@@ -54,8 +68,7 @@ def test_no_alarm_when_recent(tmp_path):
 def test_no_alarm_on_empty_db(tmp_path):
     conn = _conn(tmp_path)
     sent = []
-    hw = HealthWatch(conn, sent.append, now_fn=lambda: 1_000_000.0,
-                     no_go_hours=12, digest_hour=99)
+    hw = HealthWatch(conn, sent.append, now_fn=lambda: 1_000_000.0, digest_hour=99)
     hw.run_once()
     assert sent == []                         # no data -> no alarm
 
@@ -65,10 +78,9 @@ def test_daily_digest_fires_once_per_day(tmp_path):
     conn = _conn(tmp_path)
     # pick a now at 10:00 local on some day, with a use today
     base = _t.mktime(_t.strptime("2026-06-22 10:00", "%Y-%m-%d %H:%M"))
-    _elim(conn, base - 3600)
+    _elim(conn, base - 3600, cat="Ella")
     sent = []
-    hw = HealthWatch(conn, sent.append, now_fn=lambda: base,
-                     no_go_hours=999, digest_hour=9)    # no_go disabled
+    hw = HealthWatch(conn, sent.append, now_fn=lambda: base, digest_hour=9)
     hw.run_once(); hw.run_once()
     digests = [m for m in sent if "alive" in m.lower()]
     assert len(digests) == 1                  # once per day even on repeated passes

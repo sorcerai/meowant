@@ -203,3 +203,100 @@ class ClaudeCliLabeler(Labeler):
             print(f"[labeler] claude -p failed ({e}); ERROR (will retry)", file=sys.stderr)
             return [{"file": p, "cat": ERROR, "confidence": 0.0} for p in frame_paths]
         return self._parse(stdout, frame_paths)
+
+
+class LlamaCppLabeler(Labeler):
+    """Local fallback using llama.cpp server running Gemma 4 vision.
+    Uses the OpenAI-compatible completions API."""
+
+    CATS = ("Ucok", "Garfield", "Ella")
+
+    def __init__(self, endpoint="http://100.98.178.96:8080/v1/chat/completions", timeout=180):
+        self.endpoint = endpoint
+        self.timeout = timeout
+
+    def _encode_image(self, path):
+        import base64
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+
+    def _prompt_text(self):
+        return (
+            "You are an expert at identifying three specific cats in a litter-box camera.\n"
+            "Look closely at the cat's fur color and length. The cats are:\n"
+            "- Ella: LONG-HAIRED tortoiseshell (mix of black, brown, and orange patches), very fluffy coat, ear tufts.\n"
+            "- Ucok: SHORT-HAIRED brown/gray mackerel tabby, large, with heavy dark stripes.\n"
+            "- Garfield: SHORT-HAIRED bright ORANGE mackerel tabby, often wearing a collar.\n"
+            "Important hints:\n"
+            "1. If the cat has LONG, fluffy fur with black/orange patches, it is Ella.\n"
+            "2. If the cat is strictly ORANGE, it is Garfield.\n"
+            "3. If the cat is strictly BROWN/GRAY with dark stripes, it is Ucok.\n"
+            "4. The cat may be partially inside the box, so look for fur color on whatever body parts are visible.\n"
+            "Reply with ONLY one word: Ucok, Garfield, Ella, or none "
+            "(none = completely empty box / absolutely no cat visible)."
+        )
+
+    def _classify(self, frame_path, refs):
+        import requests
+        try:
+            b64_img = self._encode_image(frame_path)
+            content = [{"type": "text", "text": self._prompt_text()}]
+            
+            for name, rpaths in refs.items():
+                if not rpaths:
+                    continue
+                content.append({"type": "text", "text": f"\nHere is a reference photo for {name.upper()}:"})
+                ref_b64 = self._encode_image(rpaths[0])
+                content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{ref_b64}"}})
+                
+            content.append({"type": "text", "text": "\nNow identify the cat in THIS target photo:"})
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}})
+
+            messages = [
+                {
+                    "role": "user",
+                    "content": content
+                }
+            ]
+            resp = requests.post(
+                self.endpoint,
+                json={"model": "gemma", "messages": messages, "max_tokens": 300, "temperature": 0.2},
+                timeout=self.timeout
+            )
+            resp.raise_for_status()
+            message = resp.json()["choices"][0]["message"]
+            text = message.get("content", "") + " " + message.get("reasoning_content", "")
+            text = text.lower()
+            hits = {tok: text.find(tok.lower())
+                    for tok in (*self.CATS, NONE) if text.find(tok.lower()) != -1}
+            if not hits:
+                return {"file": frame_path, "cat": NONE, "confidence": 0.0}
+            cat = min(hits, key=hits.get)
+            return {"file": frame_path, "cat": cat, "confidence": 0.0 if cat == NONE else 1.0}
+        except Exception as e:
+            print(f"[labeler/llamacpp] {frame_path} failed ({e}); ERROR (will retry)",
+                  file=sys.stderr)
+            return {"file": frame_path, "cat": ERROR, "confidence": 0.0}
+
+    def predict_visit(self, frame_paths, refs):
+        return [self._classify(p, refs) for p in frame_paths]
+
+
+class FallbackLabeler(Labeler):
+    """Tries a primary labeler; if it returns ERROR, retries with a fallback labeler."""
+
+    def __init__(self, primary: Labeler, fallback: Labeler):
+        self.primary = primary
+        self.fallback = fallback
+
+    def predict_visit(self, frame_paths, refs):
+        results = self.primary.predict_visit(frame_paths, refs)
+        # Check if primary failed on any frames
+        for i, r in enumerate(results):
+            if r.get("cat") == ERROR:
+                print(f"[labeler/fallback] Primary failed on {r['file']}, trying fallback...", file=sys.stderr)
+                fallback_results = self.fallback.predict_visit([r['file']], refs)
+                if fallback_results:
+                    results[i] = fallback_results[0]
+        return results
+

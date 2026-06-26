@@ -7,7 +7,9 @@ significant week-over-week delta, AND persistence across weeks.
 """
 import json
 import math
+import re
 import statistics
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -215,18 +217,115 @@ def assess(facts, prev_findings=(), *, min_void_n=5, sigma_k=2.0,
 
 SEV_EMOJI = {"nominal": "✅", "watch": "⚠️", "drift": "🚨", "insufficient_data": "❓"}
 
+VETTED_SLUGS = {
+    "gaps-widening", "gaps-tightening", "gaps-stable",
+    "frequency-rising", "frequency-falling", "frequency-stable",
+    "weight-rising", "weight-falling", "weight-stable",
+    "attribution-falling", "attribution-stable",
+    "circadian-shift", "insufficient-data", "establishing-baseline",
+    "nominal", "watch", "drift"
+}
+
+FORBIDDEN_WORDS = ["indicates", "means", "clearly", "proves", "caused by", "therefore"]
+
+def validate_llm_output(obj, findings):
+    if not isinstance(obj, dict):
+        return False
+    # Check schema
+    if "classifier" not in obj or "hypotheses" not in obj:
+        return False
+
+    # NO digits rule
+    s = json.dumps(obj)
+    if re.search(r'\d', s):
+        return False
+        
+    # Check forbidden words in hypotheses
+    text_content = s.lower()
+    for w in FORBIDDEN_WORDS:
+        if w in text_content:
+            return False
+            
+    valid_keys = {f"{f.get('cat') or 'system'}:{f['metric']}" for f in findings}
+
+    for hyp in obj.get("hypotheses", []):
+        if not isinstance(hyp, dict): return False
+        keys = hyp.get("evidence_keys", [])
+        if not keys: return False
+        for k in keys:
+            if k not in valid_keys:
+                return False
+
+    for cat, cl in obj.get("classifier", {}).items():
+        if "severity" not in cl or "slugs" not in cl:
+            return False
+        for slug in cl["slugs"]:
+            if slug not in VETTED_SLUGS:
+                return False
+
+    return True
+
+def narrate(findings, *, run=None):
+    if not findings:
+        return None
+    if not run:
+        def _run(prompt):
+            res = subprocess.run(["claude", "-p", prompt], capture_output=True, text=True, timeout=120)
+            if res.returncode != 0:
+                raise Exception(f"claude failed: {res.stderr}")
+            return res.stdout
+        run = _run
+
+    valid_keys = [f"{f.get('cat') or 'system'}:{f['metric']}" for f in findings]
+    
+    prompt = f"""You are a statistical analyst. Read these findings:
+{json.dumps(findings, indent=2)}
+
+Valid evidence_keys you can cite: {valid_keys}
+Allowed slugs for classifier: {list(VETTED_SLUGS)}
+
+Output ONLY valid JSON with no markdown formatting.
+CRITICAL RULE 1: DO NOT INCLUDE ANY DIGITS IN YOUR JSON OUTPUT AT ALL. No 0-9 characters.
+CRITICAL RULE 2: Use hedging words (perhaps, might, could). Do NOT use: {FORBIDDEN_WORDS}.
+
+Schema:
+{{
+  "classifier": {{
+     "Ucok": {{"severity": "nominal|watch|drift", "slugs": ["slug-name"]}}
+  }},
+  "hypotheses": [
+     {{"text": "hedged observation without numbers", "evidence_keys": ["cat:metric"]}}
+  ]
+}}"""
+
+    try:
+        out = run(prompt)
+        if out.startswith("```json"):
+            out = out[7:]
+        if out.endswith("```"):
+            out = out[:-3]
+        out = out.strip()
+        obj = json.loads(out)
+        if validate_llm_output(obj, findings):
+            return obj
+    except Exception as e:
+        print(f"[weekly] narrate failed: {e}", file=sys.stderr)
+    return None
+
 
 class WeeklyAnalyst:
-    def __init__(self, conn, notify, now_fn=time.time, *,
+    def __init__(self, conn, notify, now_fn=time.time, run=None, *,
                  state_path="weekly_state.json", interval_days=7,
-                 min_void_n=5, cats=CATS):
+                 min_void_n=5, cats=CATS, shadow=True):
         self.conn = conn
         self.notify = notify
         self.now = now_fn
+        self.run_llm = run
         self.state_path = state_path
         self.interval_s = interval_days * 24 * 3600
         self.min_void_n = min_void_n
         self.cats = cats
+        self.shadow = shadow
 
     def _load_state(self):
         try:
@@ -252,17 +351,32 @@ class WeeklyAnalyst:
             return False
         facts = collect_facts(self.conn, now, cats=self.cats)
         prev = store.latest_weekly_report(self.conn)
-        # A report for the SAME window (e.g. a crash between persist and stamp caused
-        # a rerun) must NOT serve as persistence evidence — else this week's own
-        # `watch` would escalate itself to `drift` and emit a false alert.
+        # Idempotency: if a report for this exact window already exists in the DB,
+        # we crashed between log_weekly_report and saving our state stamp.
+        # Just stamp the state and skip to avoid duplicate row / duplicate LLM call.
         if prev and prev.get("period_start") == facts["period"]["start"]:
-            prev = None
+            state = self._load_state()
+            state["last_run"] = now
+            self._save_state(state)
+            return True
+        
         prev_findings = json.loads(prev["findings_json"]) if (prev and prev["findings_json"]) else ()
         findings = assess(facts, prev_findings, min_void_n=self.min_void_n)
+        
+        narrative_obj = narrate(findings, run=self.run_llm)
+        narrative_json = json.dumps(narrative_obj) if narrative_obj else None
+        
         text = facts_only_text(facts, findings)
+        if not self.shadow and narrative_obj:
+            hyps = narrative_obj.get("hypotheses", [])
+            if hyps:
+                text += "\n\n🧠 Analyst Notes:\n"
+                for hyp in hyps:
+                    text += f"• {hyp['text']}\n"
+                    
         store.log_weekly_report(
             self.conn, facts["period"]["start"], facts["period"]["end"],
-            json.dumps(facts), json.dumps(findings), None, ts=now)
+            json.dumps(facts), json.dumps(findings), narrative_json, ts=now)
         # Cadence advances regardless of delivery: the report is in the DB and
         # /weekly can re-fetch it, so a transient notify failure must not re-run
         # the week (which would double-persist) nor skip it.

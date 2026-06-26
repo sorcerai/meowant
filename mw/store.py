@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS bowl_events(
   id INTEGER PRIMARY KEY, ts TEXT, state TEXT,
   source TEXT,            -- 'vision' | 'auto_feed'
   secs_since_feed INTEGER);
+CREATE TABLE IF NOT EXISTS bowl_sessions(
+  id INTEGER PRIMARY KEY, ts TEXT, location TEXT,
+  cat TEXT, duration_s INTEGER);
 CREATE TABLE IF NOT EXISTS weekly_reports(
   id INTEGER PRIMARY KEY, ts TEXT,
   period_start TEXT, period_end TEXT,
@@ -50,6 +53,8 @@ _MIGRATIONS = [
     ("visits", "scatter_pct", "REAL"),          # changed-% of the apron ROI
     ("visits", "scatter_area", "INTEGER"),       # scatter blob area, px
     ("visits", "notified", "INTEGER DEFAULT 0"), # 1 after the named elimination alert fires
+    ("feed_events", "feeder", "TEXT"),
+    ("bowl_events", "location", "TEXT"),
 ]
 
 
@@ -296,86 +301,105 @@ def eliminations_today(conn, day=None):
         return row[0]
 
 
-def log_feed_event(conn, portions, source, ts=None):
+def log_feed_event(conn, portions, source, feeder=None, ts=None):
     """Record one dispense (from the dp-118 feed record or a manual /feed)."""
     stamp = _iso(ts) if ts is not None else datetime.now().isoformat(timespec="seconds")
     with _lock:
-        conn.execute("INSERT INTO feed_events(ts, portions, source) VALUES(?,?,?)",
-                     (stamp, int(portions), source))
+        conn.execute("INSERT INTO feed_events(ts, portions, source, feeder) VALUES(?,?,?,?)",
+                     (stamp, int(portions), source, feeder))
         conn.commit()
 
 
-def last_feed_event_ts(conn):
+def last_feed_event_ts(conn, feeder=None):
     """Epoch of the most recent feed event, or None — drives new-feed detection."""
     with _lock:
-        row = conn.execute("SELECT MAX(ts) AS m FROM feed_events").fetchone()
+        if feeder:
+            row = conn.execute("SELECT MAX(ts) AS m FROM feed_events WHERE feeder=?", (feeder,)).fetchone()
+        else:
+            row = conn.execute("SELECT MAX(ts) AS m FROM feed_events").fetchone()
     if not row or row["m"] is None:
         return None
     return datetime.fromisoformat(row["m"]).timestamp()
 
 
-def feed_in_window(conn, start_epoch, end_epoch):
+def feed_in_window(conn, start_epoch, end_epoch, feeder=None):
     """True if any feed event landed in [start, end] (inclusive)."""
     with _lock:
-        row = conn.execute(
-            "SELECT 1 FROM feed_events WHERE ts>=? AND ts<=? LIMIT 1",
-            (_iso(start_epoch), _iso(end_epoch))).fetchone()
+        if feeder:
+            row = conn.execute(
+                "SELECT 1 FROM feed_events WHERE ts>=? AND ts<=? AND feeder=? LIMIT 1",
+                (_iso(start_epoch), _iso(end_epoch), feeder)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM feed_events WHERE ts>=? AND ts<=? LIMIT 1",
+                (_iso(start_epoch), _iso(end_epoch))).fetchone()
         return row is not None
 
 
-def feed_events_today(conn, day=None):
+def feed_events_today(conn, day=None, feeder=None):
     """(meals, total_portions) for the given local day (default today)."""
     day = day or date.today().isoformat()
     with _lock:
-        row = conn.execute(
-            "SELECT COUNT(*) AS meals, COALESCE(SUM(portions),0) AS portions "
-            "FROM feed_events WHERE ts LIKE ?", (day + "%",)).fetchone()
+        if feeder:
+            row = conn.execute(
+                "SELECT COUNT(*) AS meals, COALESCE(SUM(portions),0) AS portions "
+                "FROM feed_events WHERE ts LIKE ? AND feeder=?", (day + "%", feeder)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) AS meals, COALESCE(SUM(portions),0) AS portions "
+                "FROM feed_events WHERE ts LIKE ?", (day + "%",)).fetchone()
         return row["meals"], row["portions"]
 
 
-def recent_feed_events(conn, limit=20):
+def recent_feed_events(conn, limit=20, feeder=None):
     with _lock:
-        rows = conn.execute("SELECT * FROM feed_events ORDER BY id DESC LIMIT ?",
-                            (limit,)).fetchall()
+        if feeder:
+            rows = conn.execute("SELECT * FROM feed_events WHERE feeder=? ORDER BY id DESC LIMIT ?",
+                                (feeder, limit)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM feed_events ORDER BY id DESC LIMIT ?",
+                                (limit,)).fetchall()
         return [dict(r) for r in rows]
 
 
-def log_bowl_event(conn, state, source="vision", secs_since_feed=None, ts=None):
+def log_bowl_event(conn, state, source="vision", secs_since_feed=None, location=None, ts=None):
     """Record a bowl observation ('vision') or an auto-feed bookkeeping row."""
     stamp = _iso(ts) if ts is not None else datetime.now().isoformat(timespec="seconds")
     with _lock:
         conn.execute(
-            "INSERT INTO bowl_events(ts, state, source, secs_since_feed) "
-            "VALUES(?,?,?,?)", (stamp, state, source, secs_since_feed))
+            "INSERT INTO bowl_events(ts, state, source, secs_since_feed, location) "
+            "VALUES(?,?,?,?,?)", (stamp, state, source, secs_since_feed, location))
         conn.commit()
 
 
-def last_bowl_state(conn):
+def last_bowl_state(conn, location=None):
     """Most recent vision-observed bowl state (ignores auto_feed bookkeeping rows)."""
     with _lock:
-        row = conn.execute(
-            "SELECT state FROM bowl_events WHERE source='vision' "
-            "ORDER BY id DESC LIMIT 1").fetchone()
+        if location:
+            row = conn.execute("SELECT state FROM bowl_events WHERE source='vision' AND location=? ORDER BY id DESC LIMIT 1", (location,)).fetchone()
+        else:
+            row = conn.execute("SELECT state FROM bowl_events WHERE source='vision' ORDER BY id DESC LIMIT 1").fetchone()
         return row["state"] if row else None
 
 
-def auto_feeds_today(conn):
+def auto_feeds_today(conn, location=None):
     """Count of auto-feed dispenses today — the BowlWatch rate-limit primitive."""
     today = date.today().isoformat()
     with _lock:
-        row = conn.execute(
-            "SELECT COUNT(*) AS n FROM bowl_events "
-            "WHERE source='auto_feed' AND ts LIKE ?", (today + "%",)).fetchone()
+        if location:
+            row = conn.execute("SELECT COUNT(*) AS n FROM bowl_events WHERE source='auto_feed' AND ts LIKE ? AND location=?", (today + "%", location)).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) AS n FROM bowl_events WHERE source='auto_feed' AND ts LIKE ?", (today + "%",)).fetchone()
         return row["n"]
 
 
-def last_consumption_secs(conn):
+def last_consumption_secs(conn, location=None):
     """secs_since_feed of the most recent vision 'empty' event that has one."""
     with _lock:
-        row = conn.execute(
-            "SELECT secs_since_feed FROM bowl_events "
-            "WHERE source='vision' AND state='empty' AND secs_since_feed IS NOT NULL "
-            "ORDER BY id DESC LIMIT 1").fetchone()
+        if location:
+            row = conn.execute("SELECT secs_since_feed FROM bowl_events WHERE source='vision' AND state='empty' AND secs_since_feed IS NOT NULL AND location=? ORDER BY id DESC LIMIT 1", (location,)).fetchone()
+        else:
+            row = conn.execute("SELECT secs_since_feed FROM bowl_events WHERE source='vision' AND state='empty' AND secs_since_feed IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
         return row["secs_since_feed"] if row else None
 
 
@@ -386,6 +410,27 @@ def recent_bowl_events(conn, limit=20):
         return [dict(r) for r in rows]
 
 
+def log_bowl_session(conn, location, cat, duration_s, ts=None):
+    stamp = _iso(ts) if ts is not None else datetime.now().isoformat(timespec="seconds")
+    with _lock:
+        conn.execute(
+            "INSERT INTO bowl_sessions(ts, location, cat, duration_s) VALUES(?,?,?,?)",
+            (stamp, location, cat, duration_s))
+        conn.commit()
+
+
+def recent_bowl_sessions(conn, limit=20, location=None):
+    with _lock:
+        if location:
+            rows = conn.execute("SELECT * FROM bowl_sessions WHERE location=? ORDER BY id DESC LIMIT ?",
+                                (location, limit)).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM bowl_sessions ORDER BY id DESC LIMIT ?",
+                                (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+
 def elimination_attribution_stats(conn, after_iso, before_iso):
     """For eliminated visits with after_iso <= enter_ts < before_iso, return
     (raw, attributed): raw = all eliminated=1; attributed = those carrying a
@@ -393,11 +438,13 @@ def elimination_attribution_stats(conn, after_iso, before_iso):
     so visits too recent to have been labeled are not counted as 'dropped'."""
     with _lock:
         row = conn.execute(
-            "SELECT COUNT(*) AS raw, "
-            "  SUM(CASE WHEN cat_id IS NOT NULL THEN 1 ELSE 0 END) AS attributed "
+            "SELECT "
+            "  SUM(CASE WHEN (SELECT COUNT(*) FROM captures WHERE visit_id=visits.id) > 0 THEN 1 ELSE 0 END) AS framed_raw, "
+            "  SUM(CASE WHEN (SELECT COUNT(*) FROM captures WHERE visit_id=visits.id) = 0 THEN 1 ELSE 0 END) AS frameless_raw, "
+            "  SUM(CASE WHEN cat_id IS NOT NULL AND (SELECT COUNT(*) FROM captures WHERE visit_id=visits.id) > 0 THEN 1 ELSE 0 END) AS attributed "
             "FROM visits WHERE eliminated=1 AND enter_ts>=? AND enter_ts<?",
             (after_iso, before_iso)).fetchone()
-        return row["raw"], (row["attributed"] or 0)
+        return (row["framed_raw"] or 0), (row["attributed"] or 0), (row["frameless_raw"] or 0)
 
 
 def seed_cats(conn, names):

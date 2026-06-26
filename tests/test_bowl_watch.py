@@ -23,6 +23,7 @@ class _Feeder:
     def __init__(self, ok=True):
         self.ok = ok
         self.fed = []
+        self.label = "test_feeder"
 
     def feed(self, n):
         self.fed.append(n)

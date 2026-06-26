@@ -107,10 +107,12 @@ def test_alert_marks_pee_vs_poop(tmp_path):
     conn, _, _ = _setup(tmp_path, cat="Ucok")
     from mw.elim_notify import EliminationNotifier
     n = EliminationNotifier(conn, _Labeler(conn, "Ucok"), notify=lambda m: None,
-                            now_fn=lambda: 10_000.0, poop_threshold=100)
+                            now_fn=lambda: 10_000.0, pee_threshold=80, poop_threshold=130)
     pee = n._alert_text({"cat_id": store.cat_id_by_name(conn, "Ucok"), "use_record": 65})
     poop = n._alert_text({"cat_id": store.cat_id_by_name(conn, "Ucok"), "use_record": 140})
+    uncertain = n._alert_text({"cat_id": store.cat_id_by_name(conn, "Ucok"), "use_record": 100})
     unknown = n._alert_text({"cat_id": store.cat_id_by_name(conn, "Ucok"), "use_record": None})
     assert "pee" in pee and "💧" in pee
     assert "poop" in poop and "💩" in poop
+    assert "uncertain" in uncertain and "❓" in uncertain
     assert "pee" not in unknown and "poop" not in unknown   # no marker when unknown

@@ -122,10 +122,18 @@ def digest(conn, now=None):
 
 
 def _feeds_suffix(conn, today):
-    meals, portions = store.feed_events_today(conn, today)
-    if not meals:
+    feeders = [r[0] for r in conn.execute("SELECT DISTINCT feeder FROM feed_events WHERE feeder IS NOT NULL").fetchall()]
+    if not feeders:
+        feeders = [None]
+    parts = []
+    for f in feeders:
+        meals, portions = store.feed_events_today(conn, today, feeder=f)
+        if meals:
+            lbl = f"[{f}] " if f else ""
+            parts.append(f"{lbl}{meals} feed(s)/{portions} portions")
+    if not parts:
         return ""
-    return f" 🍽️ {meals} feed(s)/{portions} portions."
+    return " 🍽️ " + "; ".join(parts) + "."
 
 
 def _hours(secs):
@@ -133,29 +141,56 @@ def _hours(secs):
 
 
 def _bowl_suffix(conn):
-    state = store.last_bowl_state(conn)
-    if not state:
+    locs = [r[0] for r in conn.execute("SELECT DISTINCT location FROM bowl_events WHERE location IS NOT NULL").fetchall()]
+    if not locs:
+        locs = [None]
+    parts = []
+    for loc in locs:
+        state = store.last_bowl_state(conn, location=loc)
+        if not state:
+            continue
+        secs = store.last_consumption_secs(conn, location=loc)
+        tail = f", emptied ~{_hours(secs)} after a feed" if secs is not None else ""
+        lbl = f"[{loc}] " if loc else ""
+        parts.append(f"{lbl}bowl {state}{tail}")
+    if not parts:
         return ""
-    secs = store.last_consumption_secs(conn)
-    tail = f", emptied ~{_hours(secs)} after a feed" if secs is not None else ""
-    return f" 🥣 bowl {state}{tail}."
+    return " 🥣 " + "; ".join(parts) + "."
 
 
 def bowl_status_text(conn):
     """Reply for /bowl: current state + last consumption time."""
-    state = store.last_bowl_state(conn)
-    if not state:
+    locs = [r[0] for r in conn.execute("SELECT DISTINCT location FROM bowl_events WHERE location IS NOT NULL").fetchall()]
+    if not locs:
+        locs = [None]
+    lines = []
+    for loc in locs:
+        state = store.last_bowl_state(conn, location=loc)
+        if not state:
+            continue
+        secs = store.last_consumption_secs(conn, location=loc)
+        tail = f"; last emptied ~{_hours(secs)} after a feed" if secs is not None else ""
+        lbl = f"[{loc}] " if loc else ""
+        
+        sessions = store.recent_bowl_sessions(conn, limit=3, location=loc)
+        sess_texts = []
+        for s in sessions:
+            when = s["ts"][5:16].replace("T", " ")
+            sess_texts.append(f"{s['cat']} ({s['duration_s']}s at {when})")
+        
+        lines.append(f"🥣 {lbl}Bowl: {state}{tail}.")
+        if sess_texts:
+            lines.append(f"   Recent eaters: {', '.join(sess_texts)}")
+    if not lines:
         return "🥣 No bowl data yet (camera not calibrated/enabled)."
-    secs = store.last_consumption_secs(conn)
-    tail = f"; last emptied ~{_hours(secs)} after a feed" if secs is not None else ""
-    return f"🥣 Bowl: {state}{tail}."
+    return "\n".join(lines)
 
 
 def feed_status_text(conn, status):
     """Reply for /feedstatus from a FeederDevice.status() dict + last logged feed."""
     if not status.get("online"):
         return "🍽️ Feeder OFFLINE — unreachable on the LAN."
-    rows = store.recent_feed_events(conn, limit=1)
+    rows = store.recent_feed_events(conn, limit=1) # Note: feeder label filtering is done per-station upstream if possible, else it's global
     last = rows[0] if rows else None
     last_txt = (f"last feed {last['ts'][5:16].replace('T', ' ')} "
                 f"({last['portions']}p, {last['source']})") if last else "no feeds logged"
@@ -173,6 +208,15 @@ def weekly_status_text(conn):
     try:
         facts = json.loads(rep["facts_json"])
         findings = json.loads(rep["findings_json"]) if rep["findings_json"] else []
-        return weekly.facts_only_text(facts, findings)
+        narrative_obj = json.loads(rep["narrative_json"]) if rep.get("narrative_json") else None
+        
+        text = weekly.facts_only_text(facts, findings)
+        if narrative_obj and "hypotheses" in narrative_obj:
+            hyps = narrative_obj["hypotheses"]
+            if hyps:
+                text += "\n\n🧠 Analyst Notes:\n"
+                for hyp in hyps:
+                    text += f"• {hyp['text']}\n"
+        return text
     except Exception:
         return f"📊 Weekly report for {rep['period_start'][:10]} → {rep['period_end'][:10]} (stored)."

@@ -21,17 +21,17 @@ import numpy as np
 # ROI as fractions of the frame: floor apron in front of the box opening,
 # excluding the box (left), the storage bin, the mop bucket (bottom-right) and
 # the shelving. (x0, y0, x1, y1)
-DEFAULT_ROI = (0.28, 0.52, 0.66, 0.96)
+DEFAULT_ROI = (0.31, 0.33, 0.47, 0.57)
 
 # changed-% of the ROI -> severity. v1 bands, calibrated on one real sample;
 # refine as more mess sizes are observed. The alert gate (severity >= 1) sits
 # far above the 0.03% clean floor.
 def severity_from_pct(pct):
-    if pct < 0.4:
+    if pct < 1.5:
         return 0
-    if pct < 2.0:
+    if pct < 8.0:
         return 1   # light — a few stray granules
-    if pct < 5.0:
+    if pct < 20.0:
         return 2   # moderate — a handful
     return 3       # heavy
 

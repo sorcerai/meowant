@@ -12,7 +12,7 @@ on-demand sweeps.
 import argparse
 
 from mw import store
-from mw.labeler import ClaudeCliLabeler, AgyLabeler
+from mw.labeler import ClaudeCliLabeler, AgyLabeler, LlamaCppLabeler, FallbackLabeler
 from mw.autolabel import AutoLabeler, discover_refs, validate
 from mw.catfilter import TorchvisionCatFilter, NullCatFilter
 
@@ -22,7 +22,8 @@ GALLERY = "gallery"
 
 def _make_labeler(backend, model):
     if backend == "agy":
-        return AgyLabeler()                 # strong teacher (82% validated)
+        # strong teacher (82% validated) falling back to local Gemma if Gemini/Agy fails
+        return FallbackLabeler(AgyLabeler(), LlamaCppLabeler())
     return ClaudeCliLabeler(model=model)    # cheaper fallback (haiku ~45%)
 
 
