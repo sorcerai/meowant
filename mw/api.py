@@ -54,6 +54,24 @@ def create_app(daemon, conn, bus=None):
         limit = int(request.args.get("limit", 20))
         return jsonify(store.recent_visits(conn, limit))
 
+    @app.get("/cats")
+    def cats():
+        from mw import cat_status as _cat_status
+        rows = _cat_status.cat_status(conn)
+        # Fetch once and index by cat name — newest-first order means first hit per name is latest
+        sessions = store.recent_bowl_sessions(conn, limit=50)
+        latest_by_cat = {}
+        for s in sessions:
+            if s["cat"] and s["cat"] not in latest_by_cat:
+                latest_by_cat[s["cat"]] = s
+        for r in rows:
+            mine = latest_by_cat.get(r["name"])
+            r["last_ate"] = (
+                {"ts": mine["ts"], "location": mine["location"], "duration_s": mine["duration_s"]}
+                if mine else None
+            )
+        return jsonify(rows)
+
     @app.post("/command")
     def command():
         body = request.get_json(force=True) or {}
