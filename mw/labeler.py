@@ -291,7 +291,10 @@ class FallbackLabeler(Labeler):
     for that frame. After `fail_threshold` consecutive primary errors the breaker
     OPENS for `cooldown_s` (so a primary outage costs ~`fail_threshold` timeouts,
     not one per frame). After the cooldown the next call half-opens — it retries
-    the primary once; a success resets, another failure re-trips.
+    the primary EXACTLY ONCE; a success resets to CLOSED, a failure re-trips
+    immediately (so a probe costs one timeout, not `fail_threshold`).
+
+    Not thread-safe; assumes the single autolabeler loop.
     """
 
     def __init__(self, primary, fallback, *, fail_threshold=2,
@@ -303,6 +306,7 @@ class FallbackLabeler(Labeler):
         self.now = now_fn
         self._fails = 0
         self._open_until = 0.0
+        self._half_open = False
 
     def _fallback_one(self, path, refs):
         fb = self.fallback.predict_visit([path], refs)
@@ -312,20 +316,29 @@ class FallbackLabeler(Labeler):
         out = []
         for p in frame_paths:
             if self.now() < self._open_until:
-                out.append(self._fallback_one(p, refs))   # breaker OPEN -> fallback
+                out.append(self._fallback_one(p, refs))     # breaker OPEN -> fallback
                 continue
+            if self._open_until > 0.0 and not self._half_open:
+                self._half_open = True                       # cooldown elapsed -> probe once
             r = self.primary.predict_visit([p], refs)
             r = r[0] if r else {"file": p, "cat": ERROR, "confidence": 0.0}
             if r.get("cat") == ERROR:
-                self._fails += 1
-                if self._fails >= self.fail_threshold:
-                    self._open_until = self.now() + self.cooldown_s
+                if self._half_open:
+                    self._open_until = self.now() + self.cooldown_s   # probe failed -> re-trip now
+                    self._half_open = False
                     self._fails = 0
-                    print("[labeler/breaker] primary tripped open; "
-                          f"fallback-only for {self.cooldown_s}s", file=sys.stderr)
+                else:
+                    self._fails += 1
+                    if self._fails >= self.fail_threshold:
+                        self._open_until = self.now() + self.cooldown_s
+                        self._fails = 0
+                        self._half_open = False
+                        print("[labeler/breaker] primary tripped open; "
+                              f"fallback-only for {self.cooldown_s}s", file=sys.stderr)
                 out.append(self._fallback_one(p, refs))
             else:
-                self._fails = 0                            # primary healthy -> reset streak
+                self._fails = 0
+                self._half_open = False                       # primary healthy -> CLOSED
                 out.append(r)
         return out
 

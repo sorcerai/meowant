@@ -48,3 +48,19 @@ def test_breaker_half_opens_after_cooldown():
     clock[0] = 1000.0 + 601                          # cooldown elapsed
     fl.predict_visit(["c.jpg"], {})
     assert primary.seen == ["c.jpg"]                 # half-open: primary retried
+
+
+def test_breaker_re_trips_on_half_open_failure():
+    clock = [1000.0]
+    primary = _StubLabeler(lambda p: ERROR)
+    fallback = _StubLabeler(lambda p: "Ella")
+    fl = FallbackLabeler(primary, fallback, fail_threshold=1,
+                         cooldown_s=600, now_fn=lambda: clock[0])
+    fl.predict_visit(["a.jpg"], {})        # trips open
+    clock[0] = 1000.0 + 601                 # cooldown elapsed
+    primary.seen.clear()
+    fl.predict_visit(["b.jpg"], {})         # half-open probe: fails -> re-trips
+    assert primary.seen == ["b.jpg"]        # probed once
+    primary.seen.clear()
+    fl.predict_visit(["c.jpg"], {})         # still open -> primary skipped
+    assert primary.seen == []
