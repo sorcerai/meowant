@@ -31,6 +31,14 @@ def _run_pruner(conn, gallery_dir, interval_s=86400, startup_delay_s=60):
         time.sleep(interval_s)
 
 
+def litterbox_cameras(cameras, bowls):
+    """Cameras used for litterbox ID/scatter — everything NOT assigned to a bowl.
+    Bowl cams (BowlWatch) must not be captured for litterbox visits: their frames
+    never show the box and each one costs a labeler call."""
+    bowl_cams = {b.get("camera") for b in (bowls or [])}
+    return [c for c in cameras if c.get("name") not in bowl_cams]
+
+
 def main():
     cfg = config.load("config.json")
     conn = store.connect("meowant.db")
@@ -84,11 +92,12 @@ def main():
         print("weekly-analyst: per-cat 7d consolidation + LLM gatekeeper (shadow: %s)" % analyst.shadow)
 
     cams = config.get(cfg, "cameras", [])
-    if cams:
+    litter_cams = litterbox_cameras(cams, config.get(cfg, "bowls", []))
+    if litter_cams:
         from mw.capture import CaptureService
         from mw.capture_health import CaptureHealth
         cap = CaptureService(
-            bus, cams, "gallery/captures",
+            bus, litter_cams, "gallery/captures",
             frames=config.get(cfg, "capture.frames", 1),
             interval_s=config.get(cfg, "capture.interval_s", 1.5),
             max_frames=config.get(cfg, "capture.max_frames", 12),  # bound disk + agy cost
@@ -100,7 +109,7 @@ def main():
             on_capture=lambda name, path, ts, vid: store.insert_capture(
                 conn, ts, vid, name, path, None))
         threading.Thread(target=cap.run, daemon=True).start()
-        print(f"capture-service: {len(cams)} camera(s), parallel grab while present "
+        print(f"capture-service: {len(litter_cams)} camera(s), parallel grab while present "
               f"(≤{cap.max_frames} rounds @ {cap.interval_s}s)")
 
         from mw.remediation import Remediator
@@ -111,7 +120,7 @@ def main():
         # Make capture failures loud AND remediated: probe streams, guard missed
         # captures, and route detections through the deterministic playbooks
         # (debounce streams, diagnose labeler stalls) -> incidents table + escalate.
-        health = CaptureHealth(conn, cams,
+        health = CaptureHealth(conn, litter_cams,
                                notify=make_notify(lambda k: config.get(cfg, k)),
                                settle_seconds=config.get(cfg, "capture.settle_seconds", 120),
                                remediator=remediator)
