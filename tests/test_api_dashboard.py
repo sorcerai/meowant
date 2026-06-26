@@ -1,5 +1,6 @@
 """Tests for GET /cats dashboard endpoint (Task 2)."""
 from mw import store, api
+from mw.events import Event, BIN_CLEAR, BIN_FULL, CLEAN_DONE
 
 
 def _app(tmp_path):
@@ -80,3 +81,33 @@ def test_bowls_and_feeders_endpoints(tmp_path):
     assert isinstance(client.get("/bowls").get_json(), list)
     assert client.get("/feeders").status_code == 200
     assert isinstance(client.get("/feeders").get_json(), list)
+
+
+def test_boxhealth_est_cleans_left_none_when_capacity_unknown(tmp_path):
+    # Fresh DB: no complete fill cycle, no bin_clear yet.
+    client, conn = _app(tmp_path)
+    d = client.get("/boxhealth").get_json()
+    assert d["capacity"] is None           # nothing learned yet
+    assert d["cleans_since_empty"] is None  # no bin_clear to count from
+    assert d["est_cleans_left"] is None     # cannot estimate without both
+
+
+def test_boxhealth_est_cleans_left_clamped_to_zero(tmp_path):
+    client, conn = _app(tmp_path)
+    t0 = 1_700_000_000  # a real post-2020 epoch (strftime('%s') stays positive)
+    # One complete cycle so capacity learns 2: clear, 2 cleans, full.
+    store.insert_event(conn, Event(BIN_CLEAR, t0))
+    store.insert_event(conn, Event(CLEAN_DONE, t0 + 10))
+    store.insert_event(conn, Event(CLEAN_DONE, t0 + 20))
+    store.insert_event(conn, Event(BIN_FULL, t0 + 30))
+    # New cycle: a fresh clear, then MORE cleans than capacity (4 > 2).
+    store.insert_event(conn, Event(BIN_CLEAR, t0 + 1000))
+    store.insert_event(conn, Event(CLEAN_DONE, t0 + 1010))
+    store.insert_event(conn, Event(CLEAN_DONE, t0 + 1020))
+    store.insert_event(conn, Event(CLEAN_DONE, t0 + 1030))
+    store.insert_event(conn, Event(CLEAN_DONE, t0 + 1040))
+
+    d = client.get("/boxhealth").get_json()
+    assert d["capacity"] == 2
+    assert d["cleans_since_empty"] == 4
+    assert d["est_cleans_left"] == 0   # max(0, 2-4) clamps, never negative

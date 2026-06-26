@@ -127,7 +127,7 @@ def create_app(daemon, conn, bus=None):
         full_since = store.bin_full_since(conn)
         cap = store.bin_fill_capacity(conn)
         last_clear = store.last_bin_clear_ts(conn)
-        cleans = store.cleans_since(conn, last_clear) if last_clear else None
+        cleans = store.cleans_since(conn, last_clear) if last_clear is not None else None
         left = max(0, cap - cleans) if (cap is not None and cleans is not None) else None
         st = _decode_state(daemon.state)
         return jsonify({
