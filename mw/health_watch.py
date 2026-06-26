@@ -42,6 +42,21 @@ class HealthWatch:
         if (now - most_recent_any) / 3600.0 >= 8:
             return  # System-wide silence; likely camera down, suppress per-cat alarms
 
+        # Degraded-attribution guard: if the box was used but the labeler could
+        # not attribute it, a per-cat "X hasn't gone" alarm is unreliable (it could
+        # be X). Suppress per-cat no-go and raise ONE honest notice instead.
+        window_iso = store._iso(now - 24 * 3600)
+        unattributed = store.unattributed_eliminations_since(self.conn, window_iso)
+        if unattributed >= 1:
+            if not self._alarmed.get("_attribution", False):
+                self.notify(f"⚠️ Attribution degraded — {unattributed} box use(s) in 24h "
+                            f"couldn't be matched to a cat; per-cat no-go alarms paused. "
+                            f"Check the labeler.")
+                self._alarmed["_attribution"] = True
+            return
+        else:
+            self._alarmed["_attribution"] = False
+
         THRESHOLDS = {"Ucok": 8, "Ella": 24, "Garfield": 24}
         lt = time.localtime(now)
         is_night = (lt.tm_hour >= 22 or lt.tm_hour < 8)

@@ -130,6 +130,17 @@ def last_elimination_ts(conn):
         return row["enter_ts"] if row else None
 
 
+def unattributed_eliminations_since(conn, after_iso):
+    """Count eliminated visits with no cat attributed, at/after after_iso.
+    A nonzero count means the box was used but the labeler couldn't say by whom —
+    the per-cat no-go alarm must not confidently claim a cat 'hasn't gone'."""
+    with _lock:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM visits "
+            "WHERE eliminated=1 AND cat_id IS NULL AND enter_ts >= ?",
+            (after_iso,)).fetchone()["n"]
+
+
 def log_incident(conn, kind, signal, action_taken, outcome, notes="", ts=None):
     """Append one watchdog episode to the incidents audit log. `signal` is any
     JSON-serializable dict; `ts` is an epoch float (None -> wall-clock now)."""

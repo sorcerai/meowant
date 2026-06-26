@@ -99,3 +99,27 @@ def test_heartbeat_swallows_errors():
     def boom(url): raise OSError("network down")
     hb = Heartbeat("https://hc-ping.com/abc", getter=boom)
     hb.run_once()   # must not raise
+
+
+def test_no_go_suppressed_when_unattributed_elims_present(tmp_path):
+    from mw import store
+    from mw.health_watch import HealthWatch
+    conn = store.connect(str(tmp_path / "t.db"))
+    store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella", "Garfield"])
+    now = 2_000_000.0
+    # Ella attributed recently (keeps system-wide guard from firing);
+    # Ucok last attributed 10h ago (>8h -> would alarm); plus a recent UNATTRIBUTED elim.
+    def visit(enter, elim, cat=None):
+        vid = store.open_visit(conn, enter); store.close_visit(conn, vid, enter + 60, 60)
+        if elim: store.mark_elimination(conn, vid, 90)
+        if cat: store.set_visit_identity(conn, vid, store.cat_id_by_name(conn, cat), 1.0)
+    visit(now - 1 * 3600, True, cat="Ella")     # recent attributed -> guard stays quiet
+    visit(now - 10 * 3600, True, cat="Ucok")    # Ucok 10h ago (>8h)
+    visit(now - 2 * 3600, True)                  # recent UNATTRIBUTED elim
+    msgs = []
+    hw = HealthWatch(conn, notify=msgs.append, now_fn=lambda: now)
+    hw._check_no_go()
+    # Must NOT fire a confident "Ucok ... No litter box use" alarm; instead one honest notice.
+    assert not any("No litter box use" in m for m in msgs)
+    assert any("attribution" in m.lower() for m in msgs)
