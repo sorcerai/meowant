@@ -159,9 +159,11 @@ def create_app(daemon, conn, bus=None):
         out = []
         for label in ("downstairs", "upstairs"):
             meals, _ = store.feed_events_today(conn, feeder=label)
+            lf = store.last_feed_event_ts(conn, feeder=label)  # epoch float or None
             out.append({
                 "label": label,
-                "last_feed_ts": store.last_feed_event_ts(conn, feeder=label),
+                # emit ISO like every other timestamp on the API (was epoch float)
+                "last_feed_ts": store._iso(lf) if lf is not None else None,
                 "today_count": meals,
             })
         return jsonify(out)
@@ -169,16 +171,17 @@ def create_app(daemon, conn, bus=None):
     if bus is not None:
         @app.get("/events")
         def events_stream():
-            q = bus.subscribe()
-
             def gen():
-                # Flush headers immediately so the client's EventSource fires
-                # `onopen` (and shows "live") without waiting for the first event —
-                # otherwise the generator blocks on q.get() and the response never
-                # opens. A periodic keepalive comment also keeps idle proxies from
-                # dropping the stream.
-                yield ": connected\n\n"
+                # Subscribe INSIDE the generator so the matching unsubscribe in
+                # `finally` is always reached — if subscribe ran in the view and the
+                # client died before the body iterated, the queue would orphan and
+                # accumulate on every publish for the life of the daemon.
+                q = bus.subscribe()
                 try:
+                    # Flush headers immediately so the client's EventSource fires
+                    # `onopen` (shows "live") without waiting for the first event;
+                    # the keepalive comment also keeps idle proxies from dropping it.
+                    yield ": connected\n\n"
                     while True:
                         try:
                             ev = q.get(timeout=20)
