@@ -137,7 +137,7 @@ abstain unless the fused decision clears a calibrated margin.
 | Signal | Color frame | IR frame | Notes |
 |---|---|---|---|
 | DINOv2-S gallery (visual embedding + kNN/centroid) | strong | weaker | the workhorse; zero-shot first |
-| Color collar (orange=Ucok / blue=Garfield) | tabby-splitter | ✗ (color gone) | existing hardware only |
+| Color collar (**pink=Ucok** / blue=Garfield) | tabby-splitter | ✗ (color gone) | owner-confirmed 2026-06-27; existing hardware only |
 | Silhouette / fur-length | ✓ | ✓ | Ella (longhair) vs short tabbies — survives IR |
 | Co-presence / exclusion | ✓ | ✓ | opportunistic now (station cams); PRIMARY once a room/hallway cam is added |
 | LoRA-adapted embedder | later | later | only if zero-shot plateaus AND enough labeled data |
