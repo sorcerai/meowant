@@ -29,7 +29,40 @@ def test_make_notify_prefers_telegram(monkeypatch):
     monkeypatch.setattr(alerts, "ntfy_notify",
                         lambda *a, **k: calls.append(("ntfy",)))
     make_notify(lambda k: cfg.get(k))("hello")
-    assert calls == [("tg", "hello", "T", "42")]
+    assert calls == [("tg", "hello", "T", ["42"])]   # recipients passed as a list
+
+
+def test_make_notify_multi_recipient_dedup(monkeypatch):
+    # owner + sitter, owner first, duplicate dropped.
+    cfg = {"alerts.telegram_bot_token": "T", "alerts.telegram_chat_id": "42",
+           "alerts.telegram_chat_ids": ["77", "42"]}
+    calls = []
+    import mw.alerts as alerts
+    monkeypatch.setattr(alerts, "telegram_notify", lambda m, t, c: calls.append(c))
+    make_notify(lambda k: cfg.get(k))("x")
+    assert calls == [["42", "77"]]
+
+
+def test_telegram_notify_sends_to_all_and_any_success(monkeypatch):
+    import mw.alerts as alerts
+    import urllib.request
+    n = {"calls": 0}
+    def fake(req, timeout=5):
+        n["calls"] += 1
+        if n["calls"] == 1:
+            raise RuntimeError("first recipient down")
+        return object()
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    ok = alerts.telegram_notify("hi", "TOK", ["bad", "good"])
+    assert ok is True and n["calls"] == 2          # tried both, one success -> True
+
+
+def test_telegram_notify_false_only_if_all_fail(monkeypatch):
+    import mw.alerts as alerts
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    assert alerts.telegram_notify("hi", "TOK", ["a", "b"]) is False
 
 
 def test_make_notify_falls_back_to_ntfy(monkeypatch):

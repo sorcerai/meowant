@@ -50,28 +50,46 @@ def ntfy_notify(msg, topic, server="https://ntfy.sh"):
 def telegram_notify(msg, token, chat_id):
     """Push via the Telegram Bot API. Messages carry an absolute send time in the
     client, so (unlike ntfy) the 'when' never collapses to a vague 'yesterday'.
-    Returns True on confirmed delivery, False on failure (so the dead-man's switch
-    can refrain from latching an alert it never actually sent)."""
-    try:
-        data = urllib.parse.urlencode(
-            {"chat_id": chat_id, "text": msg}).encode("utf-8")
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=data, method="POST")
-        urllib.request.urlopen(req, timeout=5)
-        return True
-    except Exception as e:
-        print(f"[alert] telegram failed ({e}); msg: {msg}")
-        return False
+
+    `chat_id` may be a single id or a list (owner + sitter, for unattended care).
+    Returns True if delivered to AT LEAST ONE recipient — so an alert that reached
+    a human latches — and False only if EVERY recipient failed, so a total outage
+    keeps retrying instead of the dead-man's switch latching an unsent alert."""
+    ids = chat_id if isinstance(chat_id, (list, tuple)) else [chat_id]
+    ok_any = False
+    for cid in ids:
+        try:
+            data = urllib.parse.urlencode(
+                {"chat_id": cid, "text": msg}).encode("utf-8")
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=data, method="POST")
+            urllib.request.urlopen(req, timeout=5)
+            ok_any = True
+        except Exception as e:
+            print(f"[alert] telegram to {cid} failed ({e}); msg: {msg}")
+    return ok_any
 
 
 def make_notify(cfg_get):
     """Pick the notify transport from config, best-channel first: Telegram (if a bot
-    token + chat_id are set) > ntfy (if a topic is set) > macOS desktop."""
+    token + at least one chat id are set) > ntfy (if a topic is set) > macOS desktop.
+
+    Recipients = alerts.telegram_chat_id (owner) + alerts.telegram_chat_ids (extra,
+    e.g. a sitter while away), deduped, owner first. A single id still works; adding
+    a sitter is just appending to telegram_chat_ids in config."""
     token = cfg_get("alerts.telegram_bot_token")
-    chat_id = cfg_get("alerts.telegram_chat_id")
-    if token and chat_id:
-        return lambda m: telegram_notify(m, token, chat_id)
+    primary = cfg_get("alerts.telegram_chat_id")
+    extra = cfg_get("alerts.telegram_chat_ids") or []
+    if isinstance(extra, str):
+        extra = [extra]
+    seen, recipients = set(), []
+    for c in ([primary] if primary else []) + list(extra):
+        if c and c not in seen:
+            seen.add(c)
+            recipients.append(c)
+    if token and recipients:
+        return lambda m: telegram_notify(m, token, recipients)
     topic = cfg_get("alerts.ntfy_topic")
     if topic:
         return lambda m: ntfy_notify(m, topic)
