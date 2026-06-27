@@ -99,13 +99,29 @@ def main():
     cams = config.get(cfg, "cameras", [])
     litter_cams = litterbox_cameras(cams, config.get(cfg, "bowls", []))
     if litter_cams:
-        from mw.capture import CaptureService
+        from mw.capture import CaptureService, ffmpeg_grab, http_grab
         from mw.capture_health import CaptureHealth
+        # Cheap path: if a snapshot sidecar is configured, pull warm cached frames
+        # over HTTP (GET <base>/<cam>.jpg) instead of cold RTSP opens. Defaults to
+        # ffmpeg/RTSP. Switching is config-only — no code deploy.
+        snap_base = config.get(cfg, "capture.snapshot_base", "")
+        if snap_base:
+            grabber = http_grab
+            base = snap_base.rstrip("/")
+            litter_cams = [{**c, "url": f"{base}/{c['name']}.jpg"} for c in litter_cams]
+        else:
+            grabber = ffmpeg_grab
         cap = CaptureService(
-            bus, litter_cams, "gallery/captures",
+            bus, litter_cams, "gallery/captures", grabber=grabber,
             frames=config.get(cfg, "capture.frames", 1),
             interval_s=config.get(cfg, "capture.interval_s", 1.5),
             max_frames=config.get(cfg, "capture.max_frames", 12),  # bound disk + agy cost
+            # Bound simultaneous grabs: 5 of 6 cams share one redroid publisher,
+            # so firing all of them at once caused exit-8/timeouts and could wedge
+            # the stack. Cap concurrency + retry transient failures with backoff.
+            max_concurrent=config.get(cfg, "capture.max_concurrent", 2),
+            grab_retries=config.get(cfg, "capture.grab_retries", 1),
+            retry_backoff_s=config.get(cfg, "capture.retry_backoff_s", 0.5),
             # Capture CONTINUOUSLY while the cat is present (not a fixed burst),
             # so brief visitors like Ucok are actually photographed. Reads the
             # daemon's already-maintained dp24 state — no extra device polling.
@@ -114,8 +130,10 @@ def main():
             on_capture=lambda name, path, ts, vid: store.insert_capture(
                 conn, ts, vid, name, path, None))
         threading.Thread(target=cap.run, daemon=True).start()
-        print(f"capture-service: {len(litter_cams)} camera(s), parallel grab while present "
-              f"(≤{cap.max_frames} rounds @ {cap.interval_s}s)")
+        src = "http-sidecar" if snap_base else "rtsp/ffmpeg"
+        print(f"capture-service: {len(litter_cams)} camera(s) via {src}, "
+              f"≤{cap.max_concurrent} concurrent, {cap.grab_retries} retr(y/ies), "
+              f"≤{cap.max_frames} rounds @ {cap.interval_s}s")
 
         from mw.remediation import Remediator
         remediator = Remediator(

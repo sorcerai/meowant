@@ -1,16 +1,24 @@
 """Grab frames per camera while a cat is present; passively build the Phase-3 dataset."""
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 
 from mw.events import CAT_ENTER
 
 
 def ffmpeg_grab(rtsp_url, out_path, timeout=15):
-    """Grab a single frame from an RTSP stream to out_path via ffmpeg."""
+    """Grab a single frame from an RTSP stream to out_path via ffmpeg.
+
+    NOTE: every call is a fresh RTSP cold-open (connect -> SPS/PPS -> keyframe).
+    The cryze/MediaMTX stack publishes 5 of 6 cams from one shared redroid
+    publisher, so many simultaneous cold-opens cause exit-8/timeouts and can
+    wedge the stack. Prefer `http_grab` against a warm snapshot sidecar, and
+    keep CaptureService's concurrency bounded."""
     subprocess.run(
         ["ffmpeg", "-rtsp_transport", "tcp", "-y", "-i", rtsp_url,
          "-frames:v", "1", "-q:v", "2", out_path],
@@ -18,10 +26,25 @@ def ffmpeg_grab(rtsp_url, out_path, timeout=15):
     return out_path
 
 
+def http_grab(img_url, out_path, timeout=10):
+    """Fetch a single JPEG frame over HTTP (a snapshot sidecar's
+    /img/<cam>.jpg) to out_path. Far cheaper than ffmpeg_grab: the sidecar
+    holds the stream warm and serves a cached frame, so there is no per-grab
+    RTSP handshake and no load on the shared publisher."""
+    with urllib.request.urlopen(img_url, timeout=timeout) as r:
+        status = getattr(r, "status", 200)
+        if status is not None and status != 200:
+            raise RuntimeError(f"snapshot sidecar returned HTTP {status}")
+        with open(out_path, "wb") as f:
+            shutil.copyfileobj(r, f)
+    return out_path
+
+
 class CaptureService:
     def __init__(self, bus, cameras, out_dir, grabber=ffmpeg_grab, on_capture=None,
                  frames=1, interval_s=3.0, sleep=time.sleep, visit_resolver=None,
-                 presence_fn=None, max_frames=30):
+                 presence_fn=None, max_frames=30, max_concurrent=2,
+                 grab_retries=1, retry_backoff_s=0.5):
         self.bus = bus
         self.cameras = cameras
         self.out_dir = out_dir
@@ -33,24 +56,47 @@ class CaptureService:
         self.visit_resolver = visit_resolver  # () -> visit_id, called once per visit
         self.presence_fn = presence_fn      # () -> bool: keep grabbing while a cat is present
         self.max_frames = max(1, max_frames)  # hard safety cap on rounds per visit
+        # Cap simultaneous grabs: 6 cold RTSP opens at once overwhelm the shared
+        # publisher. A semaphore keeps at most `max_concurrent` ffmpeg in flight
+        # while still grabbing every camera (the rest queue, no added sleeps).
+        self.max_concurrent = max(1, max_concurrent)
+        self.grab_retries = max(0, grab_retries)   # extra attempts on transient failure
+        self.retry_backoff_s = retry_backoff_s
         os.makedirs(out_dir, exist_ok=True)
         self._q = bus.subscribe()
 
     def _grab_one(self, cam, ts, i, visit_id):
         path = os.path.join(self.out_dir, f"{int(ts)}_{cam['name']}_{i}.jpg")
-        try:
-            self.grabber(cam["url"], path)
-        except Exception as e:
-            print(f"[capture] {cam['name']} grab failed: {e}", file=sys.stderr)
-            return
+        # Retry a transient grab failure rather than losing the frame outright —
+        # but with bounded attempts + backoff so we don't amplify load on a
+        # publisher that's already struggling. Backoff grows per attempt.
+        for attempt in range(self.grab_retries + 1):
+            try:
+                self.grabber(cam["url"], path)
+                break
+            except Exception as e:
+                if attempt < self.grab_retries:
+                    self._sleep(self.retry_backoff_s * (attempt + 1))
+                    continue
+                print(f"[capture] {cam['name']} grab failed after "
+                      f"{attempt + 1} attempt(s): {e}", file=sys.stderr)
+                return
         if self.on_capture:
             self.on_capture(cam["name"], path, ts, visit_id)
 
     def _grab_round(self, ts, i, visit_id):
-        # Grab all cameras CONCURRENTLY so a round isn't the sum of ffmpeg
-        # latencies — critical for catching brief visitors. on_capture writes
-        # through the module-locked store, so concurrent calls are safe.
-        threads = [threading.Thread(target=self._grab_one, args=(cam, ts, i, visit_id))
+        # Grab cameras concurrently (a round isn't the sum of ffmpeg latencies —
+        # critical for brief visitors) but BOUNDED by a semaphore so we never
+        # hit the shared publisher with more than `max_concurrent` cold opens at
+        # once. on_capture writes through the module-locked store, so concurrent
+        # calls are safe.
+        sem = threading.Semaphore(self.max_concurrent)
+
+        def worker(cam):
+            with sem:
+                self._grab_one(cam, ts, i, visit_id)
+
+        threads = [threading.Thread(target=worker, args=(cam,))
                    for cam in self.cameras]
         for t in threads:
             t.start()
