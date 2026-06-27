@@ -51,18 +51,21 @@ mode, quantified — and it means a sick Garfield at night is the single most li
 silent-mask. Any IR attribution to a tabby is suspect by default.
 
 **Council-endorsed architecture deltas (adopted):**
-- **Embedder: prefer MegaDescriptor-T over DINOv2-S — BAKE-OFF RUN 2026-06-27.**
-  Web grounding said MegaDescriptor (Swin/WildlifeDatasets) beats DINOv2 on animal
-  re-ID. Leave-one-out NN on our 84 human-labeled frames (cat-cropped via SSDLite)
-  measured: **daytime is a wash** (DINOv2-S 89.7% vs MegaDescriptor-T 88.2%, n=68,
-  within noise) — the benchmark did NOT transfer to daylight on our cameras. But
-  **on IR (n=16) MegaDescriptor-T leads 81.2% vs 68.8%** — and IR is the failure
-  domain. So: **MegaDescriptor-T for the build, DINOv2-S fallback.** Two bigger
-  findings: (a) BOTH embedders crush the VLM (~87-90% LOO vs 73%), confirming the
-  move off the VLM; (b) **both score 0/2 on Ucok** — with 1 match frame he is
-  unidentifiable by construction, so the embedder choice is dominated by getting
-  Ucok + IR labels. Re-run once Ucok ≥10 frames. (Note: LOO-on-gallery, not a
-  held-out test — overstates absolute accuracy; the day-vs-IR *delta* is the signal.)
+- **Embedder: DINOv2-S — TWO BAKE-OFFS RUN 2026-06-27 (v2 supersedes v1).**
+  v1 (84 frames, leave-one-FRAME-out, Ucok-IR=1) wrongly favored MegaDescriptor-T
+  on IR (81% vs 69%) — small, leaky, noise. After the Telegram-tap multiplier grew
+  the set to **453 trusted labels** (Ucok 201 / Ella 182 / Garfield 70; 142 IR),
+  v2 re-ran **leave-one-VISIT-out** (tracklet-averaged, no within-visit leakage)
+  and FLIPPED the result: **DINOv2-S wins everywhere** — visit-level 94.9% all /
+  97.2% daytime / **90.5% IR**, vs MegaDescriptor-T 89.7 / 88.9 / 71.4. Ucok 12/12,
+  Ella 13/13; only errors 2× Garfield→Ucok (the tabby collision, masking-direction
+  → conformal abstain handles it). Both crush agy's 73%. **Pick: DINOv2-S.**
+  CAVEAT: DINOv2 is a general model, so part of its edge may be scene/background
+  cueing (box, camera, angle) rather than the cat — MegaDescriptor is animal-
+  specialized to avoid that. GATE before full trust: a **cross-camera** test
+  (train cat@boxA, test@boxB). Also note labels are propagated (correlated within
+  visit) — eval MUST split by visit (done in v2); a truly held-out set (the
+  harvest) is the final confirmation.
 - **Unit of analysis is the VISIT (tracklet), not the frame.** Segment each visit,
   anchor identity at the best-lit frame, and use **tracklet-averaged embeddings**
   (suppresses blur/angle noise). Collapses ~100× of the per-frame classifications.
