@@ -56,10 +56,13 @@ def main():
         by_cat[lab].append(v)
         grp_by_cat[lab].append(vid)            # visit id = calibration group
     g = G.build_gallery(by_cat, alpha=args.alpha, groups_by_cat=grp_by_cat)
-    # Calibrated operating points from scripts/eval_margin.py (leave-one-visit-out):
-    #   color margin 0.04 -> ~83% commit @ 0% wrong; IR margin 0.10 -> ~33% commit,
-    #   ~5% residual (the Garfield/Ucok IR collision -> abstains to deadman/co-presence).
-    g.margin_color, g.margin_ir = 0.04, 0.10
+    # Calibrated operating point (leave-one-visit-out, scripts/eval_margin.py):
+    #   floor 0.40 (drops OOD/junk frames that else default to Garfield),
+    #   color margin 0.04 -> 78% commit @ 0% wrong; IR margin 0.05 -> 71% commit,
+    #   ~5% residual (Garfield/Ucok IR collision -> abstains to deadman/co-presence).
+    #   The floor — not a tight IR margin — is what controls wrong-cat; loosening
+    #   IR margin from 0.10->0.05 doubled IR commits at the same wrong rate.
+    g.margin_color, g.margin_ir, g.floor = 0.04, 0.05, 0.40
     g.save(args.out)
     print(f"\nsaved gallery -> {args.out}  (alpha={args.alpha})")
     for cid in g.cats:
