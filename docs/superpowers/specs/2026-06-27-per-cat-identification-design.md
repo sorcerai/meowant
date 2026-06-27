@@ -51,12 +51,18 @@ mode, quantified — and it means a sick Garfield at night is the single most li
 silent-mask. Any IR attribution to a tabby is suspect by default.
 
 **Council-endorsed architecture deltas (adopted):**
-- **Embedder: prefer MegaDescriptor-T over DINOv2-S.** Web grounding shows
-  MegaDescriptor (Swin, pre-trained on WildlifeDatasets) beats DINOv2 on animal
-  re-ID specifically (CowsDataset 98.7 vs 96.0; SeaStarReID 88.8 vs 82.2). The whole
-  panel defaulted to DINOv2-S — a shared training-prior blind spot grounding caught.
-  **Action: a held-out 5-shot bake-off (MegaDescriptor-T vs DINOv2-S) on our camera
-  frames decides; DINOv2-S is the fallback, not the default.**
+- **Embedder: prefer MegaDescriptor-T over DINOv2-S — BAKE-OFF RUN 2026-06-27.**
+  Web grounding said MegaDescriptor (Swin/WildlifeDatasets) beats DINOv2 on animal
+  re-ID. Leave-one-out NN on our 84 human-labeled frames (cat-cropped via SSDLite)
+  measured: **daytime is a wash** (DINOv2-S 89.7% vs MegaDescriptor-T 88.2%, n=68,
+  within noise) — the benchmark did NOT transfer to daylight on our cameras. But
+  **on IR (n=16) MegaDescriptor-T leads 81.2% vs 68.8%** — and IR is the failure
+  domain. So: **MegaDescriptor-T for the build, DINOv2-S fallback.** Two bigger
+  findings: (a) BOTH embedders crush the VLM (~87-90% LOO vs 73%), confirming the
+  move off the VLM; (b) **both score 0/2 on Ucok** — with 1 match frame he is
+  unidentifiable by construction, so the embedder choice is dominated by getting
+  Ucok + IR labels. Re-run once Ucok ≥10 frames. (Note: LOO-on-gallery, not a
+  held-out test — overstates absolute accuracy; the day-vs-IR *delta* is the signal.)
 - **Unit of analysis is the VISIT (tracklet), not the frame.** Segment each visit,
   anchor identity at the best-lit frame, and use **tracklet-averaged embeddings**
   (suppresses blur/angle noise). Collapses ~100× of the per-frame classifications.
