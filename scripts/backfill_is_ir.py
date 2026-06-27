@@ -7,15 +7,16 @@ from mw import store
 from mw.imgutil import is_grayscale
 
 
-def backfill(conn):
+def backfill(conn, base_dir="."):
     with store._lock:
         rows = [(r["id"], r["path"]) for r in
                 conn.execute("SELECT id, path FROM captures WHERE is_ir IS NULL").fetchall()]
     updates = []
     for cid, path in rows:
-        if not os.path.exists(path):
+        full = path if os.path.isabs(path) else os.path.join(base_dir, path)
+        if not os.path.exists(full):
             continue
-        g = is_grayscale(path)
+        g = is_grayscale(full)
         if g is None:
             continue
         updates.append((g, cid))  # sqlite3 converts bool -> 0/1
@@ -27,5 +28,7 @@ def backfill(conn):
 
 
 if __name__ == "__main__":
-    conn = store.connect(sys.argv[1] if len(sys.argv) > 1 else "meowant.db")
-    print(f"[backfill_is_ir] updated {backfill(conn)} rows")
+    db = sys.argv[1] if len(sys.argv) > 1 else "meowant.db"
+    base = sys.argv[2] if len(sys.argv) > 2 else os.path.dirname(os.path.abspath(db))
+    conn = store.connect(db)
+    print(f"[backfill_is_ir] updated {backfill(conn, base)} rows")
