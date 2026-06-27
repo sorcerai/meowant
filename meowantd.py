@@ -310,6 +310,36 @@ def main():
             print("harvester: DISABLED — needs warm readers (capture.warm_readers), "
                   "but grab source is not warm-readers", file=sys.stderr)
 
+        # Camera self-heal watchdog: a cam whose stream wedges (warm frame goes
+        # 0-byte/undecodable/stale for a sustained window) gets SSH-restarted at
+        # the source (service restart prudynt -> reboot). Off unless configured.
+        # Crash-safe: a setup failure must not take the daemon down.
+        if config.get(cfg, "cam_watchdog.enabled", False) and warm_pool is not None:
+            try:
+                from mw.cam_watchdog import CamWatchdog, make_ssh_restart, frame_healthy
+                _wcam = config.get(cfg, "cam_watchdog.cam", "meowcam4")
+                _whost = config.get(cfg, "cam_watchdog.ssh_host")
+                _wpw = config.get(cfg, "cam_watchdog.ssh_password")
+                if _whost and _wpw:
+                    _wfp = warm_pool.frame_path(_wcam)
+                    _wmax = config.get(cfg, "cam_watchdog.max_age_s", 300)
+                    wdog = CamWatchdog(
+                        _wcam,
+                        is_healthy_fn=lambda: frame_healthy(_wfp, _wmax),
+                        restart_fn=make_ssh_restart(
+                            _whost, config.get(cfg, "cam_watchdog.ssh_user", "root"), _wpw),
+                        notify=notify_owner,
+                        fail_grace_s=config.get(cfg, "cam_watchdog.fail_grace_s", 300),
+                        cooldown_s=config.get(cfg, "cam_watchdog.cooldown_s", 1800))
+                    threading.Thread(target=wdog.run, daemon=True).start()
+                    _CLEANUPS.append(wdog.stop)
+                    print(f"cam-watchdog: {_wcam} self-heal via ssh {_whost}")
+                else:
+                    print("cam-watchdog: DISABLED — needs cam_watchdog.ssh_host + ssh_password",
+                          file=sys.stderr)
+            except Exception as e:
+                print(f"cam-watchdog: DISABLED — setup failed ({e})", file=sys.stderr)
+
     # Poll interval: 2s (was 3s) to better catch brief visits that fall between
     # polls (e.g. Ucok's in-and-out). Configurable via poll_interval_s.
     t = threading.Thread(target=daemon.run,
