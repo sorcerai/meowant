@@ -59,3 +59,6 @@ warm_frames/
 # DINOv2 gallery artifacts (regenerate: PYTHONPATH=. python3 scripts/build_gallery.py)
 gallery.npz
 gallery_emb_cache.npz
+shadow_predictions.jsonl
+shadow_state.json
+shadow_demo*.json*

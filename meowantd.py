@@ -48,6 +48,34 @@ def _run_pruner(conn, gallery_dir, interval_s=86400, startup_delay_s=60):
         time.sleep(interval_s)
 
 
+def _run_shadow_scorer(scorer, interval_s=600, startup_delay_s=120):
+    """Score newly-completed visits with the DINOv2 matcher (shadow — logs only,
+    never touches attribution). Isolated: any error is logged and the loop
+    continues."""
+    time.sleep(startup_delay_s)
+    while True:
+        try:
+            n = scorer.score_new()
+            if n:
+                print(f"[shadow] scored {n} visit(s)")
+        except Exception as e:
+            print(f"[shadow] scorer error: {e}", file=sys.stderr)
+        time.sleep(interval_s)
+
+
+def _run_shadow_daily(log_path, cats_by_id, notify, interval_s=86400, startup_delay_s=3600):
+    """Send the owner a daily shadow-matcher summary (agreement + disagreements)."""
+    from mw import shadow
+    time.sleep(startup_delay_s)
+    while True:
+        try:
+            txt = shadow.daily_report(shadow.read_records(log_path), time.time(), cats_by_id)
+            notify(txt)
+        except Exception as e:
+            print(f"[shadow] daily report error: {e}", file=sys.stderr)
+        time.sleep(interval_s)
+
+
 def litterbox_cameras(cameras, bowls):
     """Cameras used for litterbox ID/scatter — everything NOT assigned to a bowl.
     Bowl cams (BowlWatch) must not be captured for litterbox visits: their frames
@@ -87,6 +115,35 @@ def main():
     notify_all = make_notify(_cfg_get)
     alerts = Alerts(bus, notify=notify_owner)
     threading.Thread(target=alerts.run, daemon=True).start()
+
+    # Shadow matcher: score completed visits with the DINOv2 gallery matcher and
+    # report agreement/disagreements to the OWNER daily — WITHOUT affecting live
+    # attribution or alerts. Config-gated + crash-safe (a shadow failure must
+    # never destabilize the daemon). Promote to decider only after the trip.
+    if config.get(cfg, "identify.shadow_enabled", False):
+        try:
+            from mw.shadow import ShadowScorer
+            from mw.identify import make_gallery_matcher
+            _gal = config.get(cfg, "identify.gallery_path", "gallery.npz")
+            if os.path.exists(_gal):
+                _matcher = make_gallery_matcher(_gal)
+                _slog = config.get(cfg, "identify.shadow_log", "shadow_predictions.jsonl")
+                _sstate = config.get(cfg, "identify.shadow_state", "shadow_state.json")
+                _scorer = ShadowScorer(conn, _matcher, _slog, _sstate)
+                _cats_by_id = {r[0]: r[1] for r in conn.execute("SELECT id,name FROM cats")}
+                threading.Thread(target=_run_shadow_scorer,
+                                 args=(_scorer, config.get(cfg, "identify.shadow_interval_s", 600)),
+                                 daemon=True).start()
+                threading.Thread(target=_run_shadow_daily,
+                                 args=(_slog, _cats_by_id, notify_owner,
+                                       config.get(cfg, "identify.shadow_report_interval_s", 86400)),
+                                 daemon=True).start()
+                print("shadow-matcher: DINOv2 gallery scoring completed visits (shadow; owner daily report)")
+            else:
+                print(f"shadow-matcher: gallery '{_gal}' missing — disabled (run scripts/build_gallery.py)",
+                      file=sys.stderr)
+        except Exception as e:
+            print(f"shadow-matcher: wiring failed ({e}) — continuing without it", file=sys.stderr)
 
     endpoint = config.get(cfg, "weekly.llm_endpoint")
     timeout = config.get(cfg, "weekly.llm_timeout_s", 120)

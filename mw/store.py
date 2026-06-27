@@ -655,6 +655,17 @@ def captures_for_visit(conn, visit_id):
         return [dict(r) for r in cur.fetchall()]
 
 
+def eliminated_visits_after(conn, last_id, limit=50):
+    """Completed (eliminated) visits with id > last_id, oldest first. Used by the
+    shadow matcher to score newly-finished visits without touching attribution.
+    Returns (id, cat_id) rows — cat_id is the live/committed attribution."""
+    with _lock:
+        cur = conn.execute(
+            "SELECT id, cat_id FROM visits WHERE eliminated=1 AND id>? ORDER BY id LIMIT ?",
+            (last_id, limit))
+        return [(r["id"], r["cat_id"]) for r in cur.fetchall()]
+
+
 def cat_id_by_name(conn, name):
     with _lock:
         row = conn.execute("SELECT id FROM cats WHERE name=?", (name,)).fetchone()
