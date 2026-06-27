@@ -284,6 +284,21 @@ def main():
                            roi=tuple(config.get(cfg, "scatter.m4_roi",
                                                  [0.22, 0.48, 0.62, 0.95])))
 
+        # Passive cat-frame collector: harvest cat-positive warm frames to an
+        # external drive for the re-ID training set, decoupled from litterbox
+        # visits. OFF by default — set capture.harvest_dir + capture.harvest_enabled
+        # once an external drive is mounted. Needs warm readers (the frame source).
+        harvest_dir = config.get(cfg, "capture.harvest_dir", "")
+        if harvest_dir and config.get(cfg, "capture.harvest_enabled", False) and warm_pool is not None:
+            from mw.harvester import Harvester
+            harvester = Harvester(
+                litter_cams, warm_pool, catfilter, harvest_dir,
+                interval_s=config.get(cfg, "capture.harvest_interval_s", 5.0),
+                retention=config.get(cfg, "capture.harvest_retention", 20000))
+            threading.Thread(target=harvester.run, daemon=True).start()
+            _CLEANUPS.append(harvester.stop)
+            print(f"harvester: passive cat-frame collection -> {harvest_dir}")
+
     # Poll interval: 2s (was 3s) to better catch brief visits that fall between
     # polls (e.g. Ucok's in-and-out). Configurable via poll_interval_s.
     t = threading.Thread(target=daemon.run,
