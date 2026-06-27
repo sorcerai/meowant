@@ -60,12 +60,16 @@ silent-mask. Any IR attribution to a tabby is suspect by default.
   97.2% daytime / **90.5% IR**, vs MegaDescriptor-T 89.7 / 88.9 / 71.4. Ucok 12/12,
   Ella 13/13; only errors 2× Garfield→Ucok (the tabby collision, masking-direction
   → conformal abstain handles it). Both crush agy's 73%. **Pick: DINOv2-S.**
-  CAVEAT: DINOv2 is a general model, so part of its edge may be scene/background
-  cueing (box, camera, angle) rather than the cat — MegaDescriptor is animal-
-  specialized to avoid that. GATE before full trust: a **cross-camera** test
-  (train cat@boxA, test@boxB). Also note labels are propagated (correlated within
-  visit) — eval MUST split by visit (done in v2); a truly held-out set (the
-  harvest) is the final confirmation.
+  CROSS-CAMERA GATE — PASSED (2026-06-27). The scene-cueing worry (that DINOv2,
+  a general model, might key on box/background not the cat) was tested by
+  leave-one-CAMERA-out (train on other cams, classify the held-out cam's visits):
+  **DINOv2-S 94.5% cross-camera vs 94.9% mixed — ~zero drop**, so it generalizes
+  across background/angle/lighting = it reads the CAT. MegaDescriptor-T 87.2%
+  cross-camera (below DINOv2 here too). Caveat retired. Residual error is the
+  Garfield→Ucok tabby collision (~1-2 visits/fold, masking direction) → that is
+  the job of conformal abstain, not the embedder. Remaining confirmation: a truly
+  held-out set from the harvest (these labels are propagated/correlated, mitigated
+  by visit- and camera-grouping). Harness: scratchpad `cross_camera.py`.
 - **Unit of analysis is the VISIT (tracklet), not the frame.** Segment each visit,
   anchor identity at the best-lit frame, and use **tracklet-averaged embeddings**
   (suppresses blur/angle noise). Collapses ~100× of the per-frame classifications.
