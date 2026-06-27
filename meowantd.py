@@ -1,10 +1,26 @@
 #!/usr/bin/env python3
 """Run the Meowant SC10 daemon: owns the device, serves the API on :8765."""
+import atexit
 import os
+import signal
 import threading
 import time
 
 from mw import config, store
+
+# Cleanup callbacks run on daemon shutdown (SIGTERM from `launchctl kickstart -k`,
+# SIGINT in dev). Without this, long-lived child processes — the warm-reader
+# ffmpeg — are orphaned to launchd on every reload and pile up.
+_CLEANUPS = []
+
+
+def _shutdown(signum=None, frame=None):
+    for fn in _CLEANUPS:
+        try:
+            fn()
+        except Exception:
+            pass
+    os._exit(0)
 from mw.alerts import Alerts, make_notify
 from mw.bus import EventBus
 from mw.daemon import Daemon
@@ -125,6 +141,7 @@ def main():
                 # so 4 steady readers cost ~no CPU. "" disables.
                 hwaccel=config.get(cfg, "capture.warm_hwaccel", "videotoolbox") or None)
             threading.Thread(target=warm_pool.run, daemon=True).start()
+            _CLEANUPS.append(warm_pool.stop)   # terminate ffmpeg children on shutdown
             grabber = file_grab
             litter_cams = [{**c, "url": warm_pool.frame_path(c["name"])}
                            for c in litter_cams]
@@ -471,6 +488,10 @@ def main():
 
     app = create_app(daemon, conn, bus=bus, feeders=feeder_devs, monitors=feeder_monitors,
                      config_path="config.json")
+    # Reap child processes (warm-reader ffmpeg) on reload/exit so they don't orphan.
+    atexit.register(_shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     print("meowantd → http://0.0.0.0:8765  (smart-clean idle="
           f"{sc.idle}s, enabled={sc.enabled})")
     app.run(host="0.0.0.0", port=8765, threaded=True)
