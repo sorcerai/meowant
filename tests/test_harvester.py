@@ -49,3 +49,17 @@ def test_retention_caps_total_files(tmp_path):
                   str(out), retention=3, now_fn=lambda: 200.0, sleep=lambda s: None)
     h.harvest_once()
     assert len(os.listdir(out)) <= 3     # retention enforced
+
+
+def test_no_tmp_files_remain_after_harvest(tmp_path):
+    """Temp files used for atomic copy must always be cleaned up after harvest_once."""
+    src_d = tmp_path / "warm"; src_d.mkdir()
+    out = tmp_path / "harvest"
+    _touch(str(src_d / "meowcam1.jpg"), b"CAT_FRAME")
+    cams = [{"name": "meowcam1"}]
+    h = Harvester(cams, _FakeSource(str(src_d)),
+                  _FakeFilter({"meowcam1": True}),
+                  str(out), now_fn=lambda: 100.0, sleep=lambda s: None)
+    h.harvest_once()
+    tmp_files = [f for f in os.listdir(out) if f.endswith(".tmp")]
+    assert tmp_files == [], f"Leftover .tmp files: {tmp_files}"

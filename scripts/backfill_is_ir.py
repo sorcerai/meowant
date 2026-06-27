@@ -22,7 +22,7 @@ def backfill(conn, base_dir="."):
         updates.append((g, cid))  # sqlite3 converts bool -> 0/1
     if updates:
         with store._lock:
-            conn.executemany("UPDATE captures SET is_ir=? WHERE id=?", updates)
+            conn.executemany("UPDATE captures SET is_ir=? WHERE id=? AND is_ir IS NULL", updates)
             conn.commit()
     return len(updates)
 
