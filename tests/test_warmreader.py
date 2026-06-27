@@ -36,8 +36,9 @@ class FakeProc:
 def _fake_launcher():
     launched = []
 
-    def launch(url, out_path, fps):
+    def launch(url, out_path, fps, hwaccel=None):
         p = FakeProc(url, out_path)
+        p.hwaccel = hwaccel
         launched.append(p)
         return p
 
@@ -51,6 +52,14 @@ def test_pool_launches_one_reader_per_camera(tmp_path):
     pool.start()
     assert len(launched) == 6
     assert {p.url for p in launched} == {c["url"] for c in cams}
+
+
+def test_hwaccel_passed_to_launcher(tmp_path):
+    launch, launched = _fake_launcher()
+    pool = WarmReaderPool([{"name": "a", "url": "ua"}], str(tmp_path),
+                          launch=launch, hwaccel="videotoolbox")
+    pool.start()
+    assert launched[0].hwaccel == "videotoolbox"
 
 
 def test_frame_path_per_camera(tmp_path):

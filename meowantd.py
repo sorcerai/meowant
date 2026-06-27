@@ -118,15 +118,21 @@ def main():
             src = "http-sidecar"
         elif warm:
             from mw.warmreader import WarmReaderPool, file_grab
-            warm_pool = WarmReaderPool(litter_cams, "warm_frames",
-                                       fps=config.get(cfg, "capture.warm_fps", 1.0))
+            warm_pool = WarmReaderPool(
+                litter_cams, "warm_frames",
+                fps=config.get(cfg, "capture.warm_fps", 1.0),
+                # Offload decode to the media engine (Mac Studio: videotoolbox)
+                # so 4 steady readers cost ~no CPU. "" disables.
+                hwaccel=config.get(cfg, "capture.warm_hwaccel", "videotoolbox") or None)
             threading.Thread(target=warm_pool.run, daemon=True).start()
             grabber = file_grab
             litter_cams = [{**c, "url": warm_pool.frame_path(c["name"])}
                            for c in litter_cams]
             src = "warm-readers"
             print(f"warm-readers: {len(litter_cams)} persistent ffmpeg @ "
-                  f"{config.get(cfg, 'capture.warm_fps', 1.0)}fps -> warm_frames/")
+                  f"{config.get(cfg, 'capture.warm_fps', 1.0)}fps "
+                  f"(hwaccel={config.get(cfg, 'capture.warm_hwaccel', 'videotoolbox')}) "
+                  f"-> warm_frames/")
         else:
             grabber = ffmpeg_grab
             src = "rtsp/ffmpeg"
@@ -220,8 +226,15 @@ def main():
         from mw.scatter_detector import ScatterDetector
 
         def _start_scatter(cam, out_dir, zone_label, threshold, roi=None):
+            # Reuse the warm reader's hot frames instead of cold-opening RTSP per
+            # grab — meowcam3/4 are litter cams, so a warm reader already exists.
+            if warm_pool is not None:
+                from mw.warmreader import file_grab
+                s_grabber, s_url = file_grab, warm_pool.frame_path(cam["name"])
+            else:
+                s_grabber, s_url = ffmpeg_grab, cam["url"]
             scat = ScatterDetector(
-                bus, conn, cam["url"], out_dir,
+                bus, conn, s_url, out_dir, grabber=s_grabber,
                 notify=make_notify(lambda k: config.get(cfg, k)),
                 presence_fn=lambda: daemon.state.get("24") == "cat_get_in",
                 visit_resolver=lambda: store.latest_open_visit_id(conn),
