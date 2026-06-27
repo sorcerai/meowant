@@ -20,6 +20,70 @@ hits ~73% frame accuracy with camera-domain refs, but ~27% of *committed* visits
 are confidently wrong-cat — concentrated on the Garfield/Ucok tabby collision.
 That is precisely the danger mode the north star forbids.
 
+## 2026-06-27 — Council Review + Measured Corrections (supersedes stale claims below)
+
+A `/council` pass (deep panel, architecture lens) plus a web-grounding fetch and a
+direct DB measurement changed three load-bearing assumptions in the original draft.
+Where the rest of this doc conflicts with this section, **this section wins.**
+
+**Correction 1 — the per-frame confidence signal is DEAD (measured).** Every one of
+the 1046 `captures.pred_conf` rows is exactly `1.000`; `visits.confidence` is `1.0`
+for 87/91. The VLM emits saturated confidence, so there is **no graded score to
+calibrate a conformal/abstain threshold on today.** Consequence: conformal must
+calibrate on a *real* nonconformity score — the embedder's gallery distance
+(`1 − cos(x, μ_cat)`), not the VLM's confidence. The usable "contested" signal that
+*does* exist is `label_source='auto-conflict'` (405 frames where intra-visit frames
+disagreed). Contested-ness must key on auto-conflict / tabby pred-disagreement,
+**not** on `pred_conf`.
+
+**Correction 2 — "Garfield glows in IR" is NOT supported (measured, inconclusive→
+contradicted).** Of IR frames, only 4 are predicted Garfield and they are *darker*
+(p99 brightness 207 vs Ucok 230; bright-pixel fraction lower too), not brighter. The
+sample is tiny and label-confounded, so this is "not build-on-able," not "proven
+false" — but **do not architect a free deterministic IR discriminator from coat/eye
+reflectivity.** The retroreflective-tape idea (Gemini, council) remains a *possible*
+physical fix but is gated by the owner's "no new collars/hardware" non-goal.
+
+**Correction 3 — the IR attribution collapse is one-directional (measured).** In IR
+the labeler routes **208 frames → Ucok vs 4 → Garfield.** It doesn't merely confuse
+the tabbies in IR; it *collapses both into Ucok.* That asymmetry is the 27%-wrong
+mode, quantified — and it means a sick Garfield at night is the single most likely
+silent-mask. Any IR attribution to a tabby is suspect by default.
+
+**Council-endorsed architecture deltas (adopted):**
+- **Embedder: prefer MegaDescriptor-T over DINOv2-S.** Web grounding shows
+  MegaDescriptor (Swin, pre-trained on WildlifeDatasets) beats DINOv2 on animal
+  re-ID specifically (CowsDataset 98.7 vs 96.0; SeaStarReID 88.8 vs 82.2). The whole
+  panel defaulted to DINOv2-S — a shared training-prior blind spot grounding caught.
+  **Action: a held-out 5-shot bake-off (MegaDescriptor-T vs DINOv2-S) on our camera
+  frames decides; DINOv2-S is the fallback, not the default.**
+- **Unit of analysis is the VISIT (tracklet), not the frame.** Segment each visit,
+  anchor identity at the best-lit frame, and use **tracklet-averaged embeddings**
+  (suppresses blur/angle noise). Collapses ~100× of the per-frame classifications.
+- **Conformal PREDICTION SETS, not a scalar threshold.** Use class-conditional
+  (Mondrian) split-conformal → size-1 commits; size-2 `{Garfield,Ucok}` abstains.
+  This replaces "tune one margin" (which is uncalibratable while Ucok has N=2 and
+  conf is saturated). Expect Ucok to mostly abstain until labeled — which is *safe.*
+- **Co-presence/exclusion is a HARD veto, not a soft prior** — and a free label
+  generator (3-way simultaneous sightings yield Ucok labels; Ucok N=2 is THE
+  bottleneck — label him first).
+- **Asymmetric timer-reset (the safety invariant):** a visit may reset a cat's
+  deadman quota only if its attribution is size-1 and uncontested; **contested/
+  unknown tabby visits reset NEITHER tabby's timer.** This makes "never silently
+  mask a sick cat" true *by construction* and is the precondition for re-enabling
+  the per-cat deadman (`deadman.per_cat_enabled`, currently OFF). Plus DeepSeek's
+  point: a spike in the *unknown* bucket is itself a raw health signal.
+- **IR: detection-only by default.** Day-calibrated conformal gives no IR guarantee
+  (exchangeability breaks). Bootstrap IR labels via trajectory continuity /
+  co-presence; a **self-supervised tracklet-contrastive adapter** on the NAS harvest
+  (pull same-tracklet, push concurrent-tracklet) earns IR adaptation with zero human
+  labels — *before* any LoRA.
+
+**Pre-trip status:** none of the above ships before the trip. The current safety net
+(`check_no_go`, attribution-independent, 12h, ON) is already *off the classifier* —
+exactly what the council says it must be — so it is trip-safe as-is. The work above
+is post-trip, fed by the harvest. Council run: `a5cf261ac8234980` (synthesis logged).
+
 ## Non-Goals / Out of Scope
 
 - New collars or added hardware (owner declined). We use existing collars only.
@@ -33,12 +97,15 @@ That is precisely the danger mode the north star forbids.
 Frames are **dual-mode**, verified against real captures:
 - **Color** when the room has ambient light (daytime; lit evenings/nights).
 - **True IR grayscale** in real darkness (e.g., 02:03am, no lights) — coat color
-  is physically gone; cats show IR eyeshine.
+  is physically gone. (Earlier draft claimed reliable IR eyeshine as a tabby
+  splitter; **measurement on 2026-06-27 did NOT support it** — see the corrections
+  section below.)
 
-**Prerequisite bug:** the `captures.is_ir` flag is **broken** — 0 rows flagged
-`is_ir=1` despite unmistakable IR frames in the store. The matcher must know which
-mode a frame is in (color-only signals like collars are useless in IR), so
-**fixing `is_ir` detection is prerequisite #1.**
+**Prerequisite #1 — DONE.** `captures.is_ir` detection is implemented
+(`mw/imgutil.is_grayscale`, channel-spread < 10.0) and backfilled: of 1490
+captures, **506 are flagged IR / ~984 color, 0 NULL** (`scripts/backfill_is_ir.py`,
+migration in `mw/store._MIGRATIONS`). The matcher can now gate color-only signals
+(collars) on `is_ir`.
 
 `meowcam4` runs **thingino** firmware (vs Wyze on the others) and images
 differently — treat it as a distinct imaging sub-domain when building galleries.
