@@ -9,6 +9,8 @@ import sys
 import tempfile
 import time
 
+import cv2
+
 
 class Harvester:
     def __init__(self, cams, frame_source, catfilter, out_dir, *,
@@ -51,6 +53,14 @@ class Harvester:
             if not os.path.exists(path):
                 continue
             try:
+                # Fail closed: TorchvisionCatFilter fails OPEN on undecodable frames —
+                # it logs a warning and returns True, which would bank garbage into the
+                # training set. Skip 0-byte files (cheap) and frames cv2 can't decode
+                # (e.g. partial writes, corrupt JPEG) before consulting the catfilter.
+                if os.path.getsize(path) == 0:
+                    continue
+                if cv2.imread(path) is None:
+                    continue
                 if not self.catfilter.has_cat(path):
                     continue
                 # Dedup is a byte-hash of consecutive frames: it catches a stalled warm reader
