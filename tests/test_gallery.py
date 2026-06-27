@@ -74,6 +74,19 @@ def test_tau_tighter_alpha_admits_fewer():
     assert tight.tau["Ucok"] >= loose.tau["Ucok"]
 
 
+def test_group_aware_tau_looser_than_per_frame_on_correlated_data():
+    # Two visits per cat; frames WITHIN a visit are near-identical (correlated),
+    # but the two visits sit a bit apart. Per-frame tau (optimistic) is tight;
+    # group-aware (leave-one-visit-out) tau must be LOOSER, fixing over-abstention.
+    a1 = _cluster([1, 0, 0, 0], 8, jitter=0.005, seed=1)   # visit A
+    a2 = _cluster([0.9, 0.2, 0, 0], 8, jitter=0.005, seed=2)  # visit B (shifted)
+    emb = {"Ucok": a1 + a2}
+    groups = {"Ucok": [["A"] * 8 + ["B"] * 8][0]}
+    per_frame = G.build_gallery(emb, alpha=0.1)
+    grouped = G.build_gallery(emb, alpha=0.1, groups_by_cat=groups)
+    assert grouped.tau["Ucok"] > per_frame.tau["Ucok"]
+
+
 def test_save_load_roundtrip(tmp_path):
     emb = {
         "Ucok": _cluster([1, 0, 0, 0], 10, seed=1),

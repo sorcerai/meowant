@@ -32,6 +32,52 @@ class NullMatcher(Matcher):
         return (None, 0.0)
 
 
+class GalleryMatcher(Matcher):
+    """The real matcher: embed a frame (DINOv2-S, cat-cropped) and classify it
+    against a conformal per-cat gallery. Returns (cat_id, confidence) on a
+    confident singleton, or (None, conf) to abstain — the abstain path covers
+    both 'looks like two cats' (the Garfield/Ucok collision) and 'looks like no
+    known cat'. The gallery is keyed by cat_id, so predict() satisfies the
+    Matcher contract directly.
+
+    Build with `make_gallery_matcher(gallery_path)` which wires a DinoEmbedder.
+    Kept dependency-light here (embedder is injected) so this stays unit-testable
+    with a fake embedder and no torch."""
+
+    def __init__(self, gallery, embedder, is_ir_fn=None):
+        self.gallery = gallery
+        self.embedder = embedder
+        # is_ir_fn(image_path) -> bool|None ; defaults to imgutil.is_grayscale so
+        # the matcher picks the per-mode margin (IR needs a tighter gate).
+        self.is_ir_fn = is_ir_fn
+
+    def predict(self, image_path):
+        vec = self.embedder.embed(image_path)
+        if vec is None:
+            return (None, 0.0)              # unembeddable frame never becomes an ID
+        is_ir = self._is_ir(image_path)
+        return self.gallery.classify_for_mode(vec, bool(is_ir))
+
+    def _is_ir(self, image_path):
+        fn = self.is_ir_fn
+        if fn is None:
+            from mw.imgutil import is_grayscale
+            fn = is_grayscale
+        try:
+            return fn(image_path)
+        except Exception:
+            return False                     # unknown mode -> treat as color (looser); abstain still gates
+
+
+def make_gallery_matcher(gallery_path, model_name="vit_small_patch14_dinov2.lvd142m"):
+    """Load a saved gallery + a DINOv2 embedder into a ready GalleryMatcher.
+    Imported lazily so the daemon only pays the torch cost when the matcher is
+    actually enabled."""
+    from mw.gallery import Gallery
+    from mw.embedder import DinoEmbedder
+    return GalleryMatcher(Gallery.load(gallery_path), DinoEmbedder(model_name=model_name))
+
+
 def fuse_views(predictions):
     """Combine per-camera predictions for one visit into a single identity.
 
