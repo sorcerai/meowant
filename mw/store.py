@@ -875,6 +875,37 @@ def human_attribute_visit(conn, visit_id, cat_id):
     return True
 
 
+def propagate_visit_label(conn, visit_id, cat_id, capture_ids=None, source="human"):
+    """Bulk label MANY frames of one visit at once — the Telegram-tap multiplier.
+
+    Confirming a visit's identity confirms the cat for EVERY frame in that visit,
+    so this writes the label onto each capture in `capture_ids` (or all of the
+    visit's captures when None), then syncs the visit once. `capture_ids` lets the
+    caller restrict to cat-positive frames (run the detector first) so empty
+    pre/post frames don't pollute the gallery. The `AND visit_id=?` guard means a
+    capture id belonging to another visit is silently ignored, never mislabeled.
+    Returns the number of frames actually labeled.
+
+    Contrast `human_attribute_visit`, which labels only the visit's FIRST frame."""
+    with _lock:
+        if capture_ids is None:
+            rows = conn.execute(
+                "SELECT id FROM captures WHERE visit_id=?", (visit_id,)).fetchall()
+            ids = [r["id"] for r in rows]
+        else:
+            ids = list(capture_ids)
+        if not ids:
+            return 0
+        cur = conn.executemany(
+            "UPDATE captures SET label=?, label_source=? WHERE id=? AND visit_id=?",
+            [(cat_id, source, cid, visit_id) for cid in ids])
+        n = cur.rowcount
+        conn.commit()
+    if n:
+        sync_visit_cat(conn, visit_id)
+    return n
+
+
 def human_mark_no_cat(conn, visit_id):
     """Human says no real cat used the box (false dp102 / the dog / nothing). Clear the
     elimination so it stops counting as a real use — keeps daily counts and the no-go
