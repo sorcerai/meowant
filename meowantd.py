@@ -478,9 +478,16 @@ def main():
             "/start": lambda: "🐈 Meowant SC10 bot. Commands: /cats /status /health /incidents /feed /feedstatus /bowl /weekly",
         }, label_cb=_label_cb,
             load_offset=lambda: store.get_daemon_state(conn, "telegram.offset", 0),
-            save_offset=lambda o: store.set_daemon_state(conn, "telegram.offset", o))
+            save_offset=lambda o: store.set_daemon_state(conn, "telegram.offset", o),
+            # Sitter(s) get read-only query access; /feed (and any future action)
+            # stays owner-only by being absent from readonly_cmds.
+            extra_chat_ids=config.get(cfg, "alerts.telegram_chat_ids", []),
+            readonly_cmds=["/cats", "/status", "/health", "/incidents",
+                           "/bowl", "/weekly", "/feedstatus", "/start"])
         threading.Thread(target=bot.run, daemon=True).start()
-        print("telegram-bot: inbound commands (/cats /status /health /incidents), owner-allowlisted")
+        _sitters = config.get(cfg, "alerts.telegram_chat_ids", [])
+        print(f"telegram-bot: inbound commands, owner-allowlisted"
+              + (f" + {len(_sitters)} sitter(s) read-only" if _sitters else ""))
         # Wire the photo-prompt into the notifier (only when both cameras AND Telegram are configured)
         if 'elim_notifier' in locals():
             elim_notifier.ask_who = lambda vid, paths, when, waste="": send_label_request(

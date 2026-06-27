@@ -15,11 +15,47 @@ def _update(uid, chat_id, text):
     return {"update_id": uid, "message": {"chat": {"id": chat_id}, "text": text}}
 
 
+def _bot_with_sitter():
+    sent = []
+    handlers = {"/cats": lambda: "CATS-OK", "/feed": lambda: "FED"}
+    bot = TelegramBot("tok", "100", handlers,
+                      getter=lambda *a: [], sender=lambda t, c, m: sent.append((c, m)),
+                      extra_chat_ids=["200"], readonly_cmds=["/cats", "/status"])
+    return bot, sent
+
+
 def test_owner_command_answered():
     bot, sent = _bot()
     n = bot.process([_update(1, 100, "/cats")])
     assert n == 1
     assert sent == [("100", "CATS-OK")]
+
+
+def test_sitter_readonly_command_answered_to_sitter():
+    bot, sent = _bot_with_sitter()
+    n = bot.process([_update(1, 200, "/cats")])
+    assert n == 1
+    assert sent == [("200", "CATS-OK")]              # answer goes to the SITTER, not owner
+
+
+def test_sitter_action_command_denied():
+    bot, sent = _bot_with_sitter()
+    bot.process([_update(1, 200, "/feed")])
+    assert sent and sent[0][0] == "200" and "owner-only" in sent[0][1].lower()
+    assert not any("FED" in m for _, m in sent)      # never executed
+
+
+def test_owner_action_command_still_works_with_sitter_configured():
+    bot, sent = _bot_with_sitter()
+    bot.process([_update(1, 100, "/feed")])
+    assert sent == [("100", "FED")]
+
+
+def test_unallowed_chat_still_intruder_with_sitter():
+    bot, sent = _bot_with_sitter()
+    bot.process([_update(1, 999, "/cats")])
+    assert not any(c == "999" for c, _ in sent)      # intruder gets nothing
+    assert sent and sent[0][0] == "100"              # owner warned
 
 
 def test_intruder_is_dropped_and_owner_warned_once():

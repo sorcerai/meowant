@@ -87,9 +87,16 @@ class TelegramBot:
     def __init__(self, token, chat_id, handlers, *,
                  getter=_http_get_updates, sender=_http_send,
                  sleep=time.sleep, poll_timeout=30, label_cb=None,
-                 load_offset=None, save_offset=None):
+                 load_offset=None, save_offset=None,
+                 extra_chat_ids=None, readonly_cmds=None):
         self.token = token
-        self.allowed = str(chat_id)          # the allowlist (single owner chat)
+        # The owner can do everything (incl. action commands like /feed and label
+        # taps). extra_chat_ids (e.g. a sitter) are ALSO allowed, but only for the
+        # read-only commands in readonly_cmds — never actions. Everyone else is an
+        # intruder. The allowlist is the security boundary.
+        self.owner = str(chat_id)
+        self.allowed = {self.owner} | {str(c) for c in (extra_chat_ids or [])}
+        self.readonly_cmds = {c.lower() for c in (readonly_cmds or [])}
         self.handlers = handlers             # {"/cmd": () -> str}
         self._get = getter
         self._send = sender
@@ -104,9 +111,9 @@ class TelegramBot:
         self._warned_intruder = False        # ping the owner once per intruder episode
         self.label_cb = label_cb             # (vid: int, cat: str) -> str, or None
 
-    def _reply(self, text):
+    def _reply(self, text, to=None):
         try:
-            self._send(self.token, self.allowed, text)
+            self._send(self.token, to or self.owner, text)
         except Exception as e:
             print(f"[telegram] send failed: {e}", file=sys.stderr)
 
@@ -150,8 +157,8 @@ class TelegramBot:
             if cq is not None:
                 self._answer_callback(cq.get("id"))            # dismiss Telegram's spinner
                 frm = str((cq.get("from") or {}).get("id"))
-                if frm != self.allowed:
-                    continue                                   # allowlist taps too
+                if frm != self.owner:
+                    continue                                   # labeling is owner-only
                 data = cq.get("data") or ""
                 if data.startswith("lbl:"):
                     _, vid, cat = data.split(":", 2)
@@ -163,14 +170,23 @@ class TelegramBot:
             msg = u.get("message") or u.get("edited_message") or {}
             chat = msg.get("chat", {})
             text = msg.get("text") or ""
-            if str(chat.get("id")) != self.allowed:
-                # ALLOWLIST: not the owner — drop it, warn the owner once.
+            frm = str(chat.get("id"))
+            if frm not in self.allowed:
+                # ALLOWLIST: not owner or sitter — drop it, warn the owner once.
                 if not self._warned_intruder:
                     self._reply(f"🔒 Ignored a command from an unauthorized chat "
                                 f"(id {chat.get('id')}).")
                     self._warned_intruder = True
                 continue
-            self._reply(self._dispatch(text))
+            # Sitter (allowed but not owner) may use only read-only commands;
+            # action commands like /feed stay owner-only.
+            cmd = (text.split(maxsplit=1)[0].lower().split("@")[0]) if text else ""
+            if frm != self.owner and cmd not in self.readonly_cmds:
+                self._reply("🔒 That command is owner-only. You have read-only "
+                            f"access: {', '.join(sorted(self.readonly_cmds)) or '(none)'}",
+                            to=frm)
+                continue
+            self._reply(self._dispatch(text), to=frm)          # answer the requester
             answered += 1
         # Persist the advanced cursor so a restart resumes here instead of
         # replaying this batch. Save once per batch, only when it moved.
