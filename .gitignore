@@ -54,3 +54,4 @@ weekly_state.json
 # Frontend
 frontend/node_modules/
 frontend/dist/
+warm_frames/

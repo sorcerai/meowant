@@ -101,16 +101,35 @@ def main():
     if litter_cams:
         from mw.capture import CaptureService, ffmpeg_grab, http_grab
         from mw.capture_health import CaptureHealth
-        # Cheap path: if a snapshot sidecar is configured, pull warm cached frames
-        # over HTTP (GET <base>/<cam>.jpg) instead of cold RTSP opens. Defaults to
-        # ffmpeg/RTSP. Switching is config-only — no code deploy.
+        # Grab source, in order of preference:
+        #  1. snapshot sidecar  — GET <base>/<cam>.jpg (warm cached frame, no RTSP)
+        #  2. local warm readers — one persistent ffmpeg per cam keeps the stream
+        #     hot and writes the latest frame; capture copies it (the fix for the
+        #     shared-redroid publisher choking on 6 cold RTSP opens every ~1.5s)
+        #  3. plain rtsp/ffmpeg cold-open per grab (legacy fallback)
+        # All switchable via config — no code deploy.
         snap_base = config.get(cfg, "capture.snapshot_base", "")
+        warm = config.get(cfg, "capture.warm_readers", True)
+        warm_pool = None
         if snap_base:
             grabber = http_grab
             base = snap_base.rstrip("/")
             litter_cams = [{**c, "url": f"{base}/{c['name']}.jpg"} for c in litter_cams]
+            src = "http-sidecar"
+        elif warm:
+            from mw.warmreader import WarmReaderPool, file_grab
+            warm_pool = WarmReaderPool(litter_cams, "warm_frames",
+                                       fps=config.get(cfg, "capture.warm_fps", 1.0))
+            threading.Thread(target=warm_pool.run, daemon=True).start()
+            grabber = file_grab
+            litter_cams = [{**c, "url": warm_pool.frame_path(c["name"])}
+                           for c in litter_cams]
+            src = "warm-readers"
+            print(f"warm-readers: {len(litter_cams)} persistent ffmpeg @ "
+                  f"{config.get(cfg, 'capture.warm_fps', 1.0)}fps -> warm_frames/")
         else:
             grabber = ffmpeg_grab
+            src = "rtsp/ffmpeg"
         cap = CaptureService(
             bus, litter_cams, "gallery/captures", grabber=grabber,
             frames=config.get(cfg, "capture.frames", 1),
@@ -130,7 +149,6 @@ def main():
             on_capture=lambda name, path, ts, vid: store.insert_capture(
                 conn, ts, vid, name, path, None))
         threading.Thread(target=cap.run, daemon=True).start()
-        src = "http-sidecar" if snap_base else "rtsp/ffmpeg"
         print(f"capture-service: {len(litter_cams)} camera(s) via {src}, "
               f"≤{cap.max_concurrent} concurrent, {cap.grab_retries} retr(y/ies), "
               f"≤{cap.max_frames} rounds @ {cap.interval_s}s")
