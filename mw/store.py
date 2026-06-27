@@ -252,6 +252,23 @@ def last_real_elimination_ts_any(conn):
         return row["enter_ts"] if row else None
 
 
+def last_eliminated_ts(conn):
+    """enter_ts of the most recent eliminated visit, ATTRIBUTED OR NOT — the
+    attribution-INDEPENDENT 'was the box used for elimination at all' signal.
+
+    Unlike last_real_elimination_ts_any (which JOINs cats and so only sees
+    attributed visits), this counts visits whose cat couldn't be identified, so a
+    labeler outage doesn't make it look like the box went unused. Garfield's
+    deliberate short re-entries don't fire dp102, so they're eliminated=0 and are
+    excluded automatically. This is the input to the deadman's whole-system
+    no-go catch-all."""
+    with _lock:
+        row = conn.execute(
+            "SELECT enter_ts FROM visits WHERE eliminated=1 "
+            "ORDER BY CAST(strftime('%s', enter_ts) AS INTEGER) DESC LIMIT 1").fetchone()
+        return row["enter_ts"] if row else None
+
+
 def eliminations_today_for_cat(conn, cat_name, now=None):
     """Count of this cat's eliminated visits since local midnight today."""
     now = now if now is not None else time.time()

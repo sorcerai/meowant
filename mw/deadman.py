@@ -94,6 +94,23 @@ class DeadManSwitch:
                                  f"— check on {cat}"))
         return out
 
+    def check_no_go(self):
+        """Attribution-INDEPENDENT whole-system catch-all: if NO elimination (any
+        cat, even unattributed) has been recorded in no_go_hours, capture/
+        monitoring is likely down or no cat is using the box. Uses
+        store.last_eliminated_ts (not the cats-JOIN helper) so a labeler outage
+        doesn't read as box-unused. No quiet gate — total elimination silence is
+        rare and too important to defer overnight."""
+        ts = store.last_eliminated_ts(self.conn)
+        if ts is None:
+            return None              # fresh DB / no baseline — don't false-alarm
+        hours = (self.now() - datetime.fromisoformat(ts).timestamp()) / 3600.0
+        if hours >= self.no_go_hours:
+            return (f"🚨 DEAD-MAN: no litter eliminations recorded in {hours:.0f}h "
+                    f"(limit {self.no_go_hours}h) — capture/monitoring may be down "
+                    f"or no cat is using the box. Check the cats AND the system.")
+        return None
+
     def _load_state(self):
         # A valid-JSON-but-non-dict latch file (e.g. "[1,2,3]") would make every
         # state.get() in _fire raise — which run_once's fail-loud except would then
@@ -135,6 +152,7 @@ class DeadManSwitch:
         # (latch key stays the base), or a discriminator (the cat name) so per-cat
         # alerts latch independently — otherwise a 2nd silent cat never alerts.
         for base, fn in (("liveness", lambda: [(None, self.check_liveness())]),
+                         ("no_go", lambda: [(None, self.check_no_go())]),
                          ("per_cat", self.check_per_cat)):
             try:
                 for suffix, msg in fn():
