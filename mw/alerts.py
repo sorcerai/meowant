@@ -71,16 +71,19 @@ def telegram_notify(msg, token, chat_id):
     return ok_any
 
 
-def make_notify(cfg_get):
+def make_notify(cfg_get, owner_only=False):
     """Pick the notify transport from config, best-channel first: Telegram (if a bot
     token + at least one chat id are set) > ntfy (if a topic is set) > macOS desktop.
 
     Recipients = alerts.telegram_chat_id (owner) + alerts.telegram_chat_ids (extra,
     e.g. a sitter while away), deduped, owner first. A single id still works; adding
-    a sitter is just appending to telegram_chat_ids in config."""
+    a sitter is just appending to telegram_chat_ids in config.
+
+    owner_only=True ignores the extra recipients — for routine/technical pings that
+    should reach only the owner, not the sitter (who gets just the important ones)."""
     token = cfg_get("alerts.telegram_bot_token")
     primary = cfg_get("alerts.telegram_chat_id")
-    extra = cfg_get("alerts.telegram_chat_ids") or []
+    extra = [] if owner_only else (cfg_get("alerts.telegram_chat_ids") or [])
     if isinstance(extra, str):
         extra = [extra]
     seen, recipients = set(), []

@@ -78,7 +78,13 @@ def main():
 
     bus = EventBus()
     daemon.on_event = bus.publish
-    alerts = Alerts(bus, notify=make_notify(lambda k: config.get(cfg, k)))
+    # Two alert audiences: notify_owner = just the owner (routine/technical pings);
+    # notify_all = owner + sitter(s) (important alerts only — cat health + the
+    # deadman catch-all). The sitter opted into the important set, not every ping.
+    _cfg_get = lambda k: config.get(cfg, k)
+    notify_owner = make_notify(_cfg_get, owner_only=True)
+    notify_all = make_notify(_cfg_get)
+    alerts = Alerts(bus, notify=notify_owner)
     threading.Thread(target=alerts.run, daemon=True).start()
 
     endpoint = config.get(cfg, "weekly.llm_endpoint")
@@ -103,7 +109,7 @@ def main():
         from mw.weekly import WeeklyAnalyst
         
         analyst = WeeklyAnalyst(
-            conn, make_notify(lambda k: config.get(cfg, k)),
+            conn, notify_owner,
             run=custom_run,
             state_path=config.get(cfg, "weekly.state_path", "weekly_state.json"),
             interval_days=config.get(cfg, "weekly.interval_days", 7),
@@ -178,14 +184,14 @@ def main():
 
         from mw.remediation import Remediator
         remediator = Remediator(
-            conn, make_notify(lambda k: config.get(cfg, k)),
+            conn, notify_owner,
             max_per_window=config.get(cfg, "remediation.max_per_window", 3),
             window_s=config.get(cfg, "remediation.window_s", 3600))
         # Make capture failures loud AND remediated: probe streams, guard missed
         # captures, and route detections through the deterministic playbooks
         # (debounce streams, diagnose labeler stalls) -> incidents table + escalate.
         health = CaptureHealth(conn, litter_cams,
-                               notify=make_notify(lambda k: config.get(cfg, k)),
+                               notify=notify_owner,
                                settle_seconds=config.get(cfg, "capture.settle_seconds", 120),
                                remediator=remediator)
         threading.Thread(
@@ -215,7 +221,7 @@ def main():
 
         from mw.elim_notify import EliminationNotifier
         elim_notifier = EliminationNotifier(
-            conn, autolabeler, notify=make_notify(lambda k: config.get(cfg, k)),
+            conn, autolabeler, notify=notify_owner,
             pee_threshold=config.get(cfg, "alerts.pee_threshold", 80),
             poop_threshold=config.get(cfg, "alerts.poop_threshold", 130),
             enabled=config.get(cfg, "alerts.notify_eliminations", True))
@@ -227,7 +233,7 @@ def main():
         if config.get(cfg, "canary.enabled", True):
             from mw.invariant_canary import InvariantCanary
             canary = InvariantCanary(
-                conn, make_notify(lambda k: config.get(cfg, k)),
+                conn, notify_owner,
                 window_hours=config.get(cfg, "canary.window_hours", 48),
                 grace_hours=config.get(cfg, "canary.grace_hours", 2),
                 min_sample=config.get(cfg, "canary.min_sample", 4),
@@ -252,7 +258,7 @@ def main():
                 s_grabber, s_url = ffmpeg_grab, cam["url"]
             scat = ScatterDetector(
                 bus, conn, s_url, out_dir, grabber=s_grabber,
-                notify=make_notify(lambda k: config.get(cfg, k)),
+                notify=notify_owner,
                 presence_fn=lambda: daemon.state.get("24") == "cat_get_in",
                 visit_resolver=lambda: store.latest_open_visit_id(conn),
                 clear_fn=catfilter.is_clear,   # reject frames with a cat/dog/person on the floor
@@ -285,7 +291,7 @@ def main():
 
     from mw.health_watch import HealthWatch, Heartbeat
     hw = HealthWatch(
-        conn, make_notify(lambda k: config.get(cfg, k)),
+        conn, notify_all,            # cat-health alerts -> owner + sitter (important)
         run_llm=custom_run,
         no_go_hours=config.get(cfg, "health.no_go_hours", 12),
         digest_hour=config.get(cfg, "health.digest_hour", 9),
@@ -303,7 +309,7 @@ def main():
 
     from mw.box_health import BoxHealthWatch
     bhw = BoxHealthWatch(
-        conn, make_notify(lambda k: config.get(cfg, k)),
+        conn, notify_owner,
         interval=config.get(cfg, "box_health.check_interval_s", 900),
         renag_hours=config.get(cfg, "box_health.renag_hours", 3),
         unusable_hours=config.get(cfg, "box_health.unusable_hours", 6),
@@ -332,7 +338,7 @@ def main():
                 continue
             f_dev = FeederDevice(f_cfg)
             f_mon = FeederMonitor(
-                f_dev, conn, make_notify(lambda k: config.get(cfg, k)),
+                f_dev, conn, notify_owner,
                 mealtimes=f_cfg.get("mealtimes", []),
                 poll_interval_s=f_cfg.get("poll_interval_s", 120),
                 miss_grace_minutes=f_cfg.get("miss_grace_minutes", 30),
@@ -399,7 +405,7 @@ def main():
                 
                 bw = BowlWatch(
                     _make_grab(cam_conf["url"], loc), catfilter, conn,
-                    make_notify(lambda k: config.get(cfg, k)),
+                    notify_owner,
                     feeder=paired_feeder,
                     empty_ref=b_ref,
                     roi=tuple(b_cfg.get("roi", list(DEFAULT_ROI))),
@@ -418,7 +424,7 @@ def main():
 
                 bt = BowlTracker(
                     _make_grab(cam_conf["url"], loc + "_tracker"), catfilter, bowl_refs, conn,
-                    make_notify(lambda k: config.get(cfg, k)),
+                    notify_owner,
                     location=loc,
                     poll_interval_s=config.get(cfg, "bowl_tracker.poll_interval_s", 5))
                 threading.Thread(target=bt.run, daemon=True).start()

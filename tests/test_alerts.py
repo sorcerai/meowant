@@ -43,6 +43,17 @@ def test_make_notify_multi_recipient_dedup(monkeypatch):
     assert calls == [["42", "77"]]
 
 
+def test_make_notify_owner_only_excludes_sitter(monkeypatch):
+    # Routine pings: owner_only must drop the extra (sitter) recipients.
+    cfg = {"alerts.telegram_bot_token": "T", "alerts.telegram_chat_id": "42",
+           "alerts.telegram_chat_ids": ["77"]}
+    calls = []
+    import mw.alerts as alerts
+    monkeypatch.setattr(alerts, "telegram_notify", lambda m, t, c: calls.append(c))
+    make_notify(lambda k: cfg.get(k), owner_only=True)("x")
+    assert calls == [["42"]]                         # sitter 77 excluded
+
+
 def test_telegram_notify_sends_to_all_and_any_success(monkeypatch):
     import mw.alerts as alerts
     import urllib.request
