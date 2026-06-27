@@ -159,6 +159,8 @@ def main():
         else:
             grabber = ffmpeg_grab
             src = "rtsp/ffmpeg"
+        from mw.imgutil import is_grayscale
+
         cap = CaptureService(
             bus, litter_cams, "gallery/captures", grabber=grabber,
             frames=config.get(cfg, "capture.frames", 1),
@@ -176,7 +178,7 @@ def main():
             presence_fn=lambda: daemon.state.get("24") == "cat_get_in",
             visit_resolver=lambda: store.latest_open_visit_id(conn),
             on_capture=lambda name, path, ts, vid: store.insert_capture(
-                conn, ts, vid, name, path, None))
+                conn, ts, vid, name, path, is_grayscale(path)))
         threading.Thread(target=cap.run, daemon=True).start()
         print(f"capture-service: {len(litter_cams)} camera(s) via {src}, "
               f"≤{cap.max_concurrent} concurrent, {cap.grab_retries} retr(y/ies), "
