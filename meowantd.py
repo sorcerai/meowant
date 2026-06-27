@@ -299,8 +299,8 @@ def main():
                     interval_s=config.get(cfg, "capture.harvest_interval_s", 5.0),
                     retention=config.get(cfg, "capture.harvest_retention", 20000))
                 threading.Thread(target=harvester.run, daemon=True).start()
-                # Stop the harvester BEFORE warm readers on shutdown, so it can't
-                # copy a frame from a freshly-killed ffmpeg writer.
+                # Signal the harvester to stop before warm readers on shutdown (best-effort;
+                # stop() sets a flag, not a join).
                 _CLEANUPS.insert(0, harvester.stop)
                 print(f"harvester: passive cat-frame collection -> {harvest_dir}")
             except Exception as e:

@@ -95,6 +95,7 @@ class Harvester:
                 self._sleep(self.interval_s)
             except Exception as e:           # the thread must never die
                 print(f"[harvester] loop error: {e}", file=sys.stderr)
+                self._sleep(self.interval_s)  # back off so a sustained error doesn't busy-spin
 
     def stop(self):
         self._stop = True

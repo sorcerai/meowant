@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS daemon_state(
 
 # Columns added after the initial schema shipped; applied idempotently on init.
 _MIGRATIONS = [
+    ("captures", "is_ir", "INTEGER"),
     ("captures", "label_source", "TEXT"),
     ("visits", "scatter_severity", "INTEGER"),  # 0-3 litter-scatter score (meowcam3 floor delta)
     ("visits", "scatter_pct", "REAL"),          # changed-% of the apron ROI
