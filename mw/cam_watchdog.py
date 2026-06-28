@@ -28,12 +28,22 @@ def frame_healthy(path, max_age_s=300, now_fn=time.time):
     return True
 
 
-def make_ssh_restart(host, user, password, timeout=20):
+def make_ssh_restart(host, user, password, timeout=25):
     """Return restart(level) -> bool. level 'reboot' -> full reboot; anything else
-    -> `service restart prudynt`. Uses sshpass via the SSHPASS env var (password
-    not placed in argv). Returns True on exit code 0."""
+    -> stop, wait, then start prudynt. Uses sshpass via the SSHPASS env var
+    (password not placed in argv). Returns True on exit code 0.
+
+    NOTE: the service level deliberately does NOT use `service restart prudynt`.
+    That one-shot races — `service restart` start the new instance before the old
+    one finishes tearing down the IMP subsystem, so the new prudynt sees the stale
+    lock ('Another Prudynt instance appears to be running'), exits, and the old one
+    then exits too: the streamer is left DEAD while the restart reports success.
+    An explicit stop -> sleep -> start lets teardown complete first. (Observed
+    live on meowcam4: this race left the cam down for the full cooldown until the
+    reboot escalation, which is why cheap recovery looked ineffective.)"""
     def restart(level):
-        cmd = "reboot" if level == "reboot" else "service restart prudynt"
+        cmd = "reboot" if level == "reboot" else \
+            "service stop prudynt; sleep 5; service start prudynt"
         env = dict(os.environ, SSHPASS=password)
         try:
             r = subprocess.run(

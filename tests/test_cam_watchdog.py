@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
-from mw.cam_watchdog import CamWatchdog, frame_healthy
+from mw.cam_watchdog import CamWatchdog, frame_healthy, make_ssh_restart
 
 
 # ---------------------------------------------------------------------------
@@ -235,3 +235,47 @@ def test_frame_healthy_stale_jpeg(tmp_path):
     # Pretend clock is far in the future relative to mtime
     far_future = os.path.getmtime(p) + 9999
     assert frame_healthy(p, max_age_s=300, now_fn=lambda: far_future) is False
+
+
+# ---------------------------------------------------------------------------
+# make_ssh_restart command-string tests (the SSH restart-race fix)
+# ---------------------------------------------------------------------------
+
+def _capture_run(monkeypatch):
+    """Patch subprocess.run in cam_watchdog; return a dict that gets argv/returncode."""
+    import mw.cam_watchdog as cw
+    box = {}
+
+    class _R:
+        returncode = 0
+
+    def fake_run(argv, **kw):
+        box["argv"] = argv
+        box["cmd"] = argv[-1]
+        return _R()
+
+    monkeypatch.setattr(cw.subprocess, "run", fake_run)
+    return box
+
+
+def test_ssh_restart_service_avoids_restart_race(monkeypatch):
+    """The cheap 'service' recovery must STOP, wait, then START prudynt — never a
+    one-shot `service restart`. The one-shot races: the freshly-started instance
+    sees the still-dying old one's lock and exits, silently leaving the streamer
+    dead until the slow reboot escalation. (Observed live: pid 1859 'already
+    running (pid 1670)' -> both exited -> cam down for the whole cooldown.)"""
+    box = _capture_run(monkeypatch)
+    restart = make_ssh_restart("h", "root", "pw")
+    ok = restart("service")
+    assert ok is True
+    cmd = box["cmd"]
+    assert "stop" in cmd and "start" in cmd      # explicit stop then start
+    assert "restart" not in cmd                   # not the racy one-shot
+    assert cmd.index("stop") < cmd.index("start")  # ordering: teardown before bringup
+
+
+def test_ssh_restart_reboot_level(monkeypatch):
+    box = _capture_run(monkeypatch)
+    restart = make_ssh_restart("h", "root", "pw")
+    restart("reboot")
+    assert box["cmd"] == "reboot"
