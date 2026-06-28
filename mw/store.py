@@ -897,7 +897,12 @@ def propagate_visit_label(conn, visit_id, cat_id, capture_ids=None, source="huma
     capture id belonging to another visit is silently ignored, never mislabeled.
     Returns the number of frames actually labeled.
 
-    Contrast `human_attribute_visit`, which labels only the visit's FIRST frame."""
+    Contrast `human_attribute_visit`, which labels only the visit's FIRST frame.
+
+    WIRING STATUS: NOT currently called by the live Telegram tap — `meowantd._label_cb`
+    still uses `human_attribute_visit` (one frame per tap). This was used for a one-off
+    bulk-propagation that grew the gallery's label set; promoting it into the live tap
+    is a deliberate post-trip change (it alters gallery composition), not yet done."""
     with _lock:
         if capture_ids is None:
             rows = conn.execute(

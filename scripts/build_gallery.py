@@ -69,7 +69,11 @@ def main():
         print(f"   {cats.get(cid,cid):10} n={len(by_cat[cid]):3}  tau={g.tau[cid]:.4f}")
 
     # ---- leave-one-visit-out conformal safety profile ----
-    print("\n=== leave-one-visit-out conformal profile (commit / abstain / WRONG) ===")
+    # NOTE: this profile uses the OFFLINE conformal singleton rule (gg.classify),
+    # which is NOT what production runs. The deployed decoder is the argmax+margin
+    # rule (Gallery.classify_nn); for the operating-point profile that matches
+    # production, see scripts/eval_margin.py. This print is diagnostic only.
+    print("\n=== leave-one-visit-out conformal profile [OFFLINE rule, not prod] ===")
     visits = sorted(set(v[0] for v in vecs))
     for tag, ff in (("ALL", lambda i: True), ("DAYTIME", lambda i: not i), ("IR", lambda i: i)):
         commit = abstain = wrong = scored = 0
