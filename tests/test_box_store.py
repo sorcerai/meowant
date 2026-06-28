@@ -1,5 +1,5 @@
 from mw import store
-from mw.events import Event, BIN_FULL, BIN_CLEAR, CLEAN_DONE
+from mw.events import Event, BIN_FULL, BIN_CLEAR, CLEAN_DONE, FAULT, FAULT_CLEAR
 
 T = 1_000_000.0
 
@@ -8,6 +8,9 @@ def _db(tmp_path):
 
 def _ev(conn, kind, ts):
     store.insert_event(conn, Event(kind, ts))
+
+def _fault(conn, ts, bitmap):
+    store.insert_event(conn, Event(FAULT, ts, {"bitmap": bitmap}))
 
 def test_bin_full_since_none_when_clear(tmp_path):
     conn = _db(tmp_path)
@@ -28,6 +31,29 @@ def test_last_bin_clear_ts(tmp_path):
     assert store.last_bin_clear_ts(conn) is None
     _ev(conn, BIN_CLEAR, T); _ev(conn, BIN_CLEAR, T + 500)
     assert store.last_bin_clear_ts(conn) == store._iso(T + 500)
+
+def test_active_fault_none_with_no_events(tmp_path):
+    assert store.active_fault(_db(tmp_path)) is None
+
+def test_active_fault_returns_onset_and_bitmap(tmp_path):
+    conn = _db(tmp_path)
+    _fault(conn, T, 1)                                   # faulted, never cleared
+    assert store.active_fault(conn) == (store._iso(T), 1)
+
+def test_active_fault_none_after_clear(tmp_path):
+    conn = _db(tmp_path)
+    _fault(conn, T, 1); _ev(conn, FAULT_CLEAR, T + 50)   # cleared
+    assert store.active_fault(conn) is None
+
+def test_active_fault_onset_is_earliest_since_clear_not_latest(tmp_path):
+    # Bitmap shifts while still stuck (E1 -> E1+E2): onset must stay the FIRST fault
+    # after the last clear so the UNUSABLE clock measures true stuck-duration; the
+    # bitmap reported is the LATEST so the message names the current codes.
+    conn = _db(tmp_path)
+    _fault(conn, T - 1000, 1); _ev(conn, FAULT_CLEAR, T - 900)   # an old, cleared fault
+    _fault(conn, T, 1)                                            # onset of current stretch
+    _fault(conn, T + 4 * 3600, 3)                                # codes change, still stuck
+    assert store.active_fault(conn) == (store._iso(T), 3)
 
 def test_cleans_since_counts_after_bound(tmp_path):
     conn = _db(tmp_path)

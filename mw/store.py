@@ -162,6 +162,36 @@ def bin_full_since(conn):
         return full["ts"]
 
 
+def active_fault(conn):
+    """(onset_iso, bitmap) of an unrecovered box fault, else None.
+
+    Mirrors bin_full_since, with two refinements the fault watchdog needs:
+      - onset = the EARLIEST fault since the last fault_clear (not the latest), so
+        the UNUSABLE escalation clock measures true stuck-duration even when the
+        fault codes shift while the box stays stuck.
+      - bitmap = the LATEST fault's codes, so the alert names what's wrong now.
+    None => no fault, or it has since cleared. Id ordering is monotonic + tz-immune."""
+    with _lock:
+        latest = conn.execute(
+            "SELECT id, detail FROM events WHERE kind='fault' "
+            "ORDER BY id DESC LIMIT 1").fetchone()
+        if not latest:
+            return None
+        clear = conn.execute(
+            "SELECT id FROM events WHERE kind='fault_clear' ORDER BY id DESC LIMIT 1").fetchone()
+        clear_id = clear["id"] if clear else 0
+        if clear_id >= latest["id"]:
+            return None
+        onset = conn.execute(
+            "SELECT ts FROM events WHERE kind='fault' AND id > ? "
+            "ORDER BY id ASC LIMIT 1", (clear_id,)).fetchone()
+    try:
+        bitmap = int((json.loads(latest["detail"]) or {}).get("bitmap") or 0)
+    except (TypeError, ValueError):
+        bitmap = 0
+    return (onset["ts"], bitmap)
+
+
 def last_bin_clear_ts(conn):
     """ISO ts of the most recent bin_clear (the start of the current fill cycle), else None."""
     with _lock:

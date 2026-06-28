@@ -6,7 +6,7 @@ from mw import store
 from mw.telegram_bot import TelegramBot
 from mw.health_watch import HealthWatch
 from mw.box_health import BoxHealthWatch
-from mw.events import Event, BIN_FULL
+from mw.events import Event, BIN_FULL, FAULT
 
 T = 1_000_000.0
 
@@ -95,3 +95,14 @@ def test_box_health_nag_latch_persists_across_restart(tmp_path):
     assert len(sent) == 1                              # nagged once
     BoxHealthWatch(conn, sent.append, now_fn=lambda: now, renag_hours=3).run_once()  # restart
     assert len(sent) == 1, "restart re-nagged within the re-nag window"
+
+
+def test_box_health_fault_latch_persists_across_restart(tmp_path):
+    conn = _conn(tmp_path)
+    store.insert_event(conn, Event(FAULT, T, {"bitmap": 1}))   # faulted, never cleared
+    now = T + 100
+    sent = []
+    BoxHealthWatch(conn, sent.append, now_fn=lambda: now, renag_hours=3).run_once()
+    assert len(sent) == 1                              # nagged once
+    BoxHealthWatch(conn, sent.append, now_fn=lambda: now, renag_hours=3).run_once()  # restart
+    assert len(sent) == 1, "restart re-nagged the fault within the re-nag window"

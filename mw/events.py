@@ -10,6 +10,7 @@ BIN_FULL = "bin_full"
 BIN_CLEAR = "bin_clear"
 CHUTE_FULL = "chute_full"
 FAULT = "fault"
+FAULT_CLEAR = "fault_clear"
 ELIMINATION = "elimination"
 
 
@@ -49,6 +50,11 @@ def detect_events(prev, new, ts):
         o22, n22 = int(_g(prev, 22) or 0), int(_g(new, 22) or 0)
         if n22 and n22 != o22:
             evs.append(Event(FAULT, ts, {"bitmap": n22}))
+        # nonzero -> 0: the box recovered. Emit a clear (mirrors BIN_CLEAR) so the
+        # fault watchdog can compute "stuck since" and re-arm. Without this a fault
+        # would read as latched forever.
+        elif o22 and not n22:
+            evs.append(Event(FAULT_CLEAR, ts))
 
     # Dedupe elimination: at most one ELIMINATION per tick, preferring the
     # dp102 record (carries use_record) over the dp7 count increment.

@@ -10,6 +10,21 @@ def test_decode_bits():
 
 def test_decode_dp102():
     assert decode.decode_dp102("ADcAAA==") == 55
+
+def test_fault_summary_e1_is_human_readable():
+    # dp22 bit0 (=1) is E1 = "infrared protection" per the Meowant app. The summary
+    # must name the code AND say what to do, so an alert is actionable by a sitter.
+    s = decode.fault_summary(1)
+    assert "E1" in s
+    assert "infrared protection" in s.lower()
+
+def test_fault_summary_unknown_code_still_labeled(tmp_path=None):
+    # An undocumented fault bit must still surface its E-code, never a bare number.
+    s = decode.fault_summary(0b100)        # bit2 -> E3, meaning unknown
+    assert "E3" in s
+
+def test_fault_summary_none_when_no_fault():
+    assert decode.fault_summary(0) is None
     assert decode.decode_dp102("AOMAAA==") == 227
 
 def test_status_values():

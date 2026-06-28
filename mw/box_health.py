@@ -10,7 +10,7 @@ import sys
 import time
 from datetime import datetime
 
-from mw import store
+from mw import decode, store
 
 
 class BoxHealthWatch:
@@ -30,16 +30,41 @@ class BoxHealthWatch:
         self._last_nag = st.get("last_nag", 0.0)        # epoch of last bin-full/unusable nag
         self._approach_clear = st.get("approach_clear") # bin_clear ts the warn is armed against
         self._approach_warned = st.get("approach_warned", False)
+        self._fault_last_nag = st.get("fault_last_nag", 0.0)  # epoch of last fault re-nag
 
     def _save_latch(self):
         store.set_daemon_state(self.conn, "box_health.latch", {
             "last_nag": self._last_nag,
             "approach_clear": self._approach_clear,
             "approach_warned": self._approach_warned,
+            "fault_last_nag": self._fault_last_nag,
         })
+
+    def _check_fault(self, now):
+        """Re-nag + UNUSABLE escalation for a latched box fault (e.g. E1 infrared
+        protection = stuck, needs manual clearing). Parity with the bin-full path:
+        a fault that pings once and goes silent could leave the box dead for days
+        on an unattended trip. The escalation clock measures from fault ONSET, so a
+        shifting bitmap can't keep pushing UNUSABLE out. Re-arms when the fault clears."""
+        fault = store.active_fault(self.conn)
+        if fault is None:
+            self._fault_last_nag = 0.0       # recovered -> next fault nags immediately
+            return
+        if now - self._fault_last_nag < self.renag_s:
+            return
+        onset_iso, bitmap = fault
+        summary = decode.fault_summary(bitmap) or f"fault bitmap {bitmap}"
+        secs = now - datetime.fromisoformat(onset_iso).timestamp()
+        if secs >= self.unusable_s:
+            self.notify(f"🚨 SC10 UNUSABLE {secs / 3600:.0f}h — {summary}. "
+                        f"Cats can't go — fix it NOW.")
+        else:
+            self.notify(f"🚨 SC10 STUCK — {summary}.")
+        self._fault_last_nag = now
 
     def _check(self):
         now = self.now()
+        self._check_fault(now)               # independent of bin-full: box can be both
         full_since = store.bin_full_since(self.conn)
         if full_since is not None:
             secs = now - datetime.fromisoformat(full_since).timestamp()

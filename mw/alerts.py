@@ -5,13 +5,13 @@ import subprocess
 import urllib.parse
 import urllib.request
 
-from mw.events import CHUTE_FULL, FAULT
+from mw.events import CHUTE_FULL
 
 _MESSAGES = {
     CHUTE_FULL: lambda e: "⚠️ Waste chute full or blocked",
-    FAULT: lambda e: f"❌ SC10 fault: {e.detail.get('bitmap')}",
-    # BIN_FULL is NOT here — BoxHealthWatch owns bin-full messaging (re-nag +
-    # UNUSABLE escalation + approaching-full heads-up); Alerts must not double-ping.
+    # BIN_FULL and FAULT are NOT here — BoxHealthWatch owns both (re-nag + UNUSABLE
+    # escalation, with human-readable E-code text for faults); Alerts must not
+    # double-ping them.
     # ELIMINATION is NOT here — named alerts are sent by EliminationNotifier
     # (label-on-leave, ~30s delayed) so the cat's name resolves before the push.
 }

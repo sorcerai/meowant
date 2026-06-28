@@ -14,6 +14,14 @@ VENDOR = {
 }
 PHASE_VALUES = ["enter", "finish_clean"]
 NOTIFY_BITS = ["garbage_box_full", "E1", "E2", "E3", "E4", "E5"]
+FAULT_BITS = ["E1", "E2", "E3", "E4", "E5"]
+# What each dp22 fault code means in practice + the action it demands. Only E1 is
+# confirmed (owner read it off the Meowant app: "infrared protection triggered",
+# which in practice = the box is stuck and needs manual clearing). Unknown codes
+# still get surfaced by their E-label so an alert is never a bare number.
+FAULT_MEANINGS = {
+    "E1": "infrared protection triggered — box stuck, clear the chute / move waste manually",
+}
 
 
 def hhmm(m):
@@ -28,6 +36,21 @@ def decode_bits(val, labels):
     val = int(val or 0)
     on = [labels[i] for i in range(len(labels)) if val & (1 << i)]
     return on or ["none"]
+
+
+def fault_summary(bitmap):
+    """Human-readable summary of a dp22 fault bitmap, or None if no fault.
+    Names each active E-code and (where known) what it means + the fix, so an
+    alert is actionable by a sitter. e.g. fault_summary(1) ->
+    'infrared protection triggered — box stuck, ... (E1)'."""
+    codes = decode_bits(bitmap, FAULT_BITS)
+    if codes == ["none"]:
+        return None
+    parts = []
+    for c in codes:
+        meaning = FAULT_MEANINGS.get(c)
+        parts.append(f"{meaning} ({c})" if meaning else f"fault {c} (see the box)")
+    return "; ".join(parts)
 
 
 def decode_dp102(b64):

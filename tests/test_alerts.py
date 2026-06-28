@@ -6,7 +6,7 @@ def test_alert_message_mapping():
     # BIN_FULL is no longer an instant alert — BoxHealthWatch owns it.
     assert alert_message(Event(BIN_FULL, 1.0)) is None
     assert alert_message(Event(ELIMINATION, 1.0, {})) is None  # named alert via EliminationNotifier
-    assert "fault" in alert_message(Event(FAULT, 1.0, {"bitmap": 2})).lower()
+    assert alert_message(Event(FAULT, 1.0, {"bitmap": 2})) is None  # BoxHealthWatch owns it now
     assert alert_message(Event(CAT_ENTER, 1.0)) is None  # not alert-worthy
 
 def test_alerts_dispatches_via_notify():
@@ -100,6 +100,7 @@ def test_bin_full_no_longer_instant_alert():
     # BoxHealthWatch owns bin-full messaging now; Alerts must not double-ping it.
     assert alert_message(Event(BIN_FULL, 0.0)) is None
 
-def test_fault_still_instant_alert():
-    msg = alert_message(Event(FAULT, 0.0, {"bitmap": 1}))
-    assert msg is not None and "fault" in msg.lower()
+def test_fault_no_longer_instant_alert():
+    # BoxHealthWatch owns fault messaging now (re-nag + UNUSABLE escalation);
+    # Alerts must not double-ping it, exactly like BIN_FULL.
+    assert alert_message(Event(FAULT, 0.0, {"bitmap": 1})) is None
