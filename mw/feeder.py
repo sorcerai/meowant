@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from mw import store
+from mw import bowl, store
 
 def decode_plaf103_record(b64):
     """Decode a dp-118 feed record -> {"ts": epoch, "portions": int}, or None."""
@@ -224,15 +224,23 @@ class FeederMonitor:
                 continue                     # window still open
             
             has_feed = store.feed_in_window(self.conn, start, deadline, feeder=self.label)
-            if not has_feed and self.bowl_watch and hhmm in self._preshots:
-                post_pct, _ = self.bowl_watch.check_fullness()
-                pre_pct = self._preshots[hhmm][1]
-                if post_pct is not None and post_pct > pre_pct + 3.0:
-                    store.log_feed_event(self.conn, 0, "scheduled", feeder=self.label, ts=meal)
-                    has_feed = True
-            
-            if has_feed:
-                self._missed_alerted.add(key)            # satisfied
+            expected_skip = False
+            if not has_feed and self.bowl_watch:
+                post_pct, post_state = self.bowl_watch.check_fullness()
+                # (a) a dispense the device poll missed shows up as a bowl rise vs the pre-shot
+                if hhmm in self._preshots and post_pct is not None:
+                    pre_pct = self._preshots[hhmm][1]
+                    if post_pct > pre_pct + 3.0:
+                        store.log_feed_event(self.conn, 0, "scheduled", feeder=self.label, ts=meal)
+                        has_feed = True
+                # (b) bowl still has food -> the feeder's skip-when-full is intentional, not a
+                # miss. Suppress the false alarm. An EMPTY or unreadable (None) bowl still
+                # alarms — fail toward alerting, never toward a silent starve.
+                if not has_feed and post_state is not None and post_state != bowl.EMPTY:
+                    expected_skip = True
+
+            if has_feed or expected_skip:
+                self._missed_alerted.add(key)            # fed, or an intentional skip-when-full
             elif self.notify(f"🚨 Feeder '{self.label}' MISSED the {hhmm} drop (no dispense by "
                              f"+{self.miss_grace_minutes}min) — check the feeder") is not False:
                 store.log_incident(self.conn, "missed_feed", {"mealtime": hhmm, "feeder": self.label}, "escalated", "failed", "No feed or bowl-rise detected in window")

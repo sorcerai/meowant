@@ -678,6 +678,31 @@ def cat_name_by_id(conn, cat_id):
         return row["name"] if row else None
 
 
+def reference_captures(conn, cat_id, limit=6):
+    """Paths of a cat's human-labeled capture frames — the same rows
+    scripts/build_gallery.py embeds, i.e. what the matcher actually trusts. One
+    per visit for variety; hand-labeled ('human') and color frames preferred,
+    newest first. Used to render the dashboard's reference photos (NOT the
+    orphaned gallery/<name>/ folder, which the matcher never reads)."""
+    with _lock:
+        rows = conn.execute(
+            """SELECT path, visit_id FROM captures
+               WHERE label=? AND label_source IN ('human','human-propagated')
+                 AND path IS NOT NULL
+               ORDER BY (label_source='human') DESC, COALESCE(is_ir,0) ASC, ts DESC""",
+            (cat_id,)).fetchall()
+    out, seen = [], set()
+    for r in rows:
+        vid = r["visit_id"]
+        if vid in seen:
+            continue
+        seen.add(vid)
+        out.append(r["path"])
+        if len(out) >= limit:
+            break
+    return out
+
+
 def visit_is_eliminated(conn, visit_id):
     """True if this visit recorded an elimination (use_record fired) — ground
     truth that a cat was present, so the cat/no-cat filter must not veto it."""

@@ -175,6 +175,95 @@ def test_missed_drop_silent_when_feed_landed(tmp_path):
     assert msgs == []                                # drop happened -> no alarm
 
 
+class _FakeBowl:
+    """Minimal bowl_watch stand-in: check_fullness() -> (pct, state)."""
+    def __init__(self, pct, state):
+        self._r = (pct, state)
+    def check_fullness(self):
+        return self._r
+
+
+def _missed_feed_incidents(conn):
+    return conn.execute("SELECT COUNT(*) FROM incidents WHERE kind='missed_feed'").fetchone()[0]
+
+
+def test_missed_drop_silent_when_bowl_still_full(tmp_path):
+    """The feeder intentionally skips a scheduled drop because the bowl still has
+    food (skip-when-full). meowant must NOT raise a false 'missed feed' alarm for
+    an expected skip — no Telegram message and no incident."""
+    from mw import bowl
+    conn = _db(tmp_path)
+    import time as _t
+    lt = _t.localtime(T)
+    seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [seven - 600]                                    # watching since before the meal
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
+                      mealtimes=["07:00"], miss_grace_minutes=30)
+    m.bowl_watch = _FakeBowl(80.0, bowl.FULL)               # bowl still full at the deadline
+    clock[0] = seven + 31 * 60
+    m.poll_once()
+    assert msgs == []                                       # no false alarm
+    assert _missed_feed_incidents(conn) == 0                # no incident logged
+
+
+def test_missed_drop_silent_when_bowl_has_some_food(tmp_path):
+    """Partial food (SOME) also makes a skip legitimate — still no alarm."""
+    from mw import bowl
+    conn = _db(tmp_path)
+    import time as _t
+    lt = _t.localtime(T)
+    seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [seven - 600]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
+                      mealtimes=["07:00"], miss_grace_minutes=30)
+    m.bowl_watch = _FakeBowl(12.0, bowl.SOME)
+    clock[0] = seven + 31 * 60
+    m.poll_once()
+    assert msgs == []
+    assert _missed_feed_incidents(conn) == 0
+
+
+def test_missed_drop_fires_when_bowl_empty(tmp_path):
+    """An EMPTY bowl with no dispense is a real miss — the alarm MUST still fire."""
+    from mw import bowl
+    conn = _db(tmp_path)
+    import time as _t
+    lt = _t.localtime(T)
+    seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [seven - 600]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
+                      mealtimes=["07:00"], miss_grace_minutes=30)
+    m.bowl_watch = _FakeBowl(2.0, bowl.EMPTY)
+    clock[0] = seven + 31 * 60
+    m.poll_once()
+    assert len(msgs) == 1 and "missed" in msgs[0].lower()
+    assert _missed_feed_incidents(conn) == 1
+
+
+def test_missed_drop_fires_when_bowl_unreadable(tmp_path):
+    """Unreadable bowl (None) can't confirm food present -> fail toward alerting."""
+    conn = _db(tmp_path)
+    import time as _t
+    lt = _t.localtime(T)
+    seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [seven - 600]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
+                      mealtimes=["07:00"], miss_grace_minutes=30)
+    m.bowl_watch = _FakeBowl(None, None)                    # grab blocked/unreadable
+    clock[0] = seven + 31 * 60
+    m.poll_once()
+    assert len(msgs) == 1 and "missed" in msgs[0].lower()
+    assert _missed_feed_incidents(conn) == 1
+
+
 def test_failed_delivery_does_not_latch_hopper(tmp_path):
     conn = _db(tmp_path)
     dev = FakeFeederDevice([{"online": True, "food_level": "empty", "last_feed": None}])

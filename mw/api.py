@@ -273,9 +273,23 @@ def create_app(daemon, conn, bus=None, feeders=None, monitors=None,
             if rep else None
         )
 
-        # Browser-fetchable URLs (served by the /gallery route), not FS paths.
-        files = sorted(_glob.glob(os.path.join(gallery_abs, name.lower(), "*.jp*")))[:6]
-        photos = [f"/gallery/{name.lower()}/{os.path.basename(f)}" for f in files]
+        # Reference photos = frames the matcher actually trusts: this cat's
+        # human-labeled captures (the rows build_gallery embeds), one per visit.
+        # We do NOT show the gallery/<name>/ folder — those are orphaned full-frame
+        # refs (often empty-box) that nothing in the matcher reads. Browser-fetchable
+        # /gallery URLs, not FS paths.
+        photos = []
+        if cat_id is not None:
+            for p in store.reference_captures(conn, cat_id):
+                if "gallery/" not in p:
+                    continue
+                rel = p.split("gallery/", 1)[1]                 # e.g. 'captures/xxx.jpg'
+                if os.path.exists(os.path.join(gallery_abs, rel)):
+                    photos.append(f"/gallery/{rel}")
+        # Fallback: a cat with no labeled captures yet still shows its folder refs.
+        if not photos:
+            files = sorted(_glob.glob(os.path.join(gallery_abs, name.lower(), "*.jp*")))[:6]
+            photos = [f"/gallery/{name.lower()}/{os.path.basename(f)}" for f in files]
 
         return jsonify({**rows[name], "timeline": timeline, "weekly": weekly, "photos": photos})
 
