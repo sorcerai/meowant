@@ -253,13 +253,20 @@ def main():
         health = CaptureHealth(conn, litter_cams,
                                notify=notify_owner,
                                settle_seconds=config.get(cfg, "capture.settle_seconds", 120),
+                               # Warm-frame blackout guard: only meaningful when warm
+                               # readers actually started (they write warm_frames/<cam>.jpg).
+                               # Gate on warm_pool, NOT the `warm` config flag — snapshot_base
+                               # mode skips the reader branch even with warm=True (the default),
+                               # which would otherwise stat missing files and false-alarm forever.
+                               warm_dir=("warm_frames" if warm_pool is not None else None),
+                               warm_stale_seconds=config.get(cfg, "capture.warm_stale_seconds", 180),
                                remediator=remediator)
         threading.Thread(
             target=health.run,
             kwargs={"interval": config.get(cfg, "capture.health_interval_s", 300)},
             daemon=True).start()
-        print(f"capture-health: stream probe + missed-capture guard "
-              f"(every {config.get(cfg, 'capture.health_interval_s', 300)}s)")
+        print(f"capture-health: stream probe + missed-capture guard + warm-frame "
+              f"blackout guard (every {config.get(cfg, 'capture.health_interval_s', 300)}s)")
 
         # Auto-labeler (the 'teacher'): name the cat per visit so the gallery
         # builds itself. agy/antigravity backend (82% vs haiku's 45%); the

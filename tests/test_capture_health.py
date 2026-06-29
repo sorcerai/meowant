@@ -1,8 +1,26 @@
 """Capture-health: proactive stream probe + reactive missed-capture guard."""
+import os
+
 from mw import store
 from mw.capture_health import CaptureHealth
 
 T = 1_000_000.0  # fixed "now" for deterministic settle/age windows
+
+
+def _warm(tmp_path, ages):
+    """Build a warm-frame dir; ages = {cam_name: seconds_old} (omit a cam to leave
+    its frame missing). Returns the dir path."""
+    d = tmp_path / "warm"
+    d.mkdir(exist_ok=True)
+    for name, age in ages.items():
+        f = d / f"{name}.jpg"
+        f.write_bytes(b"x")
+        os.utime(f, (T - age, T - age))
+    return str(d)
+
+
+def _cams(*names):
+    return [{"name": n, "url": f"rtsp://x/{n}"} for n in names]
 
 
 def _db(tmp_path):
@@ -192,6 +210,62 @@ def test_stream_down_escalates_when_persistent(tmp_path):
         R.time.sleep = orig_sleep
     assert len(msgs) == 1 and "DOWN" in msgs[0]
     assert store.recent_incidents(conn)[0]["outcome"] == "escalated"
+
+
+# ---- proactive warm-frame blackout guard -----------------------------------
+
+def test_warm_blackout_all_stale_alerts_once(tmp_path):
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {"meowcam1": 600, "meowcam2": 600})   # both stale > 180s
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam2"), notify=msgs.append,
+                      now_fn=lambda: T, warm_dir=wd, warm_stale_seconds=180)
+    h.check_warm_frames()
+    h.check_warm_frames()                                        # latched -> no repeat
+    assert len(msgs) == 1 and "blind" in msgs[0].lower()
+
+def test_warm_one_fresh_camera_suppresses_alert(tmp_path):
+    # cam4 chronically dead but cam1 fresh -> NOT a blackout, no alert.
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {"meowcam1": 5, "meowcam4": 9000})
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam4"), notify=msgs.append,
+                      now_fn=lambda: T, warm_dir=wd, warm_stale_seconds=180)
+    h.check_warm_frames()
+    assert msgs == []
+
+def test_warm_missing_frame_counts_as_blind(tmp_path):
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {})                                     # no files at all
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam2"), notify=msgs.append,
+                      now_fn=lambda: T, warm_dir=wd, warm_stale_seconds=180)
+    h.check_warm_frames()
+    assert len(msgs) == 1 and "blind" in msgs[0].lower()
+
+def test_warm_recovers_and_rearms(tmp_path):
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {"meowcam1": 600, "meowcam2": 600})
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam2"), notify=msgs.append,
+                      now_fn=lambda: T, warm_dir=wd, warm_stale_seconds=180)
+    h.check_warm_frames()
+    assert len(msgs) == 1
+    os.utime(os.path.join(wd, "meowcam1.jpg"), (T - 5, T - 5))   # one cam recovers
+    h.check_warm_frames()                                        # re-arm, silent
+    assert len(msgs) == 1
+    os.utime(os.path.join(wd, "meowcam1.jpg"), (T - 600, T - 600))  # blind again
+    h.check_warm_frames()
+    assert len(msgs) == 2                                        # alerts again after re-arm
+
+def test_warm_check_noop_without_warm_dir(tmp_path):
+    # http-sidecar / rtsp installs don't run warm readers -> signal n/a, never alert.
+    conn = _db(tmp_path)
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1"), notify=msgs.append,
+                      now_fn=lambda: T, warm_dir=None)
+    h.check_warm_frames()
+    assert msgs == []
 
 
 def test_run_once_isolates_exceptions(tmp_path):
