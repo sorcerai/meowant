@@ -75,6 +75,79 @@ def test_scorer_does_not_touch_visit_rows(tmp_path):
     assert committed == 2                           # live attribution UNCHANGED
 
 
+# ---- live promotion (flip the shadow to a live decider) --------------------
+
+def _unattributed_elim(conn, n_frames, is_ir=0, ts=1782583200.0):
+    vid = store.open_visit(conn, ts)
+    conn.execute("UPDATE visits SET eliminated=1, cat_id=NULL WHERE id=?", (vid,))
+    conn.commit()
+    for i in range(n_frames):
+        store.insert_capture(conn, ts, vid, "meowcam1", f"v{vid}_f{i}.jpg", is_ir=is_ir)
+    return vid
+
+
+def _live(conn, matcher, tmp_path, **kw):
+    return shadow.ShadowScorer(conn, matcher, str(tmp_path / "live.jsonl"),
+                               str(tmp_path / "live.json"),
+                               now_fn=lambda: 1782583200.0, live=True, **kw)
+
+
+def test_live_writes_identity_when_committed(tmp_path):
+    conn = _db(tmp_path)
+    v = _unattributed_elim(conn, 3)
+    _live(conn, _StubMatcher({v: (1, 0.9)}), tmp_path, min_views=2).score_new()
+    assert store.get_visit(conn, v)["cat_id"] == 1          # matcher promoted to live
+
+
+def test_live_abstains_leaves_unattributed(tmp_path):
+    conn = _db(tmp_path)
+    v = _unattributed_elim(conn, 3)
+    _live(conn, _StubMatcher({v: (None, 0.0)}), tmp_path).score_new()
+    assert store.get_visit(conn, v)["cat_id"] is None       # abstain -> no guess written
+
+
+def test_live_requires_min_views(tmp_path):
+    conn = _db(tmp_path)
+    v = _unattributed_elim(conn, 1)                          # only 1 frame names a cat
+    _live(conn, _StubMatcher({v: (1, 0.9)}), tmp_path, min_views=2).score_new()
+    assert store.get_visit(conn, v)["cat_id"] is None       # 1 < 2 -> not enough corroboration
+
+
+def test_live_respects_threshold(tmp_path):
+    conn = _db(tmp_path)
+    v = _unattributed_elim(conn, 3)
+    _live(conn, _StubMatcher({v: (1, 0.4)}), tmp_path, min_views=2, threshold=0.6).score_new()
+    assert store.get_visit(conn, v)["cat_id"] is None       # 0.4 < 0.6 -> abstain
+
+
+def test_live_never_overrides_human(tmp_path):
+    conn = _db(tmp_path)
+    v = _unattributed_elim(conn, 3)
+    cid = store.captures_for_visit(conn, v)[0]["id"]
+    conn.execute("UPDATE captures SET label=3, label_source='human' WHERE id=?", (cid,))
+    conn.commit()
+    store.set_visit_identity(conn, v, 3, 1.0)               # human says Ella(3)
+    _live(conn, _StubMatcher({v: (1, 0.9)}), tmp_path, min_views=2).score_new()  # matcher says Ucok
+    assert store.get_visit(conn, v)["cat_id"] == 3          # human preserved, matcher ignored
+
+
+def test_live_off_is_shadow_only(tmp_path):
+    conn = _db(tmp_path)
+    v = _unattributed_elim(conn, 3)
+    shadow.ShadowScorer(conn, _StubMatcher({v: (1, 0.9)}), str(tmp_path / "s.jsonl"),
+                        str(tmp_path / "s.json"), now_fn=lambda: 1.0).score_new()  # live defaults False
+    assert store.get_visit(conn, v)["cat_id"] is None       # shadow-only: logged, never written
+
+
+def test_live_write_never_touches_captures_label(tmp_path):
+    conn = _db(tmp_path)
+    v = _unattributed_elim(conn, 3)
+    _live(conn, _StubMatcher({v: (1, 0.9)}), tmp_path, min_views=2).score_new()
+    labels = [c["label"] for c in store.captures_for_visit(conn, v)]
+    assert all(l is None for l in labels)                  # gallery-safe: no captures.label written
+    assert shadow.read_records(str(tmp_path / "live.jsonl"))[0]["live_written"] is True
+
+
 def test_daily_report_summarizes_and_flags(tmp_path):
     cats = {1: "Ucok", 2: "Garfield", 3: "Ella"}
     now = 1782583200.0

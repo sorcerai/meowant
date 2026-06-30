@@ -40,12 +40,20 @@ class ShadowScorer:
     """Scores new eliminated visits with the matcher and appends results to a
     JSONL log. Tracks progress by last-scored visit id in a state file."""
 
-    def __init__(self, conn, matcher, log_path, state_path, now_fn=time.time):
+    def __init__(self, conn, matcher, log_path, state_path, now_fn=time.time,
+                 live=False, min_views=2, threshold=0.0):
         self.conn = conn
         self.matcher = matcher
         self.log_path = log_path
         self.state_path = state_path
         self.now = now_fn
+        # Live promotion (off by default = pure shadow). When live, a committed
+        # prediction is WRITTEN to visits.cat_id (never captures.label, so the
+        # gallery can't retrain on its own guesses), but only with enough
+        # corroborating views and never over a human label.
+        self.live = live
+        self.min_views = min_views        # frames that must name a cat before we commit
+        self.threshold = threshold        # min fused confidence to commit
 
     def _last(self):
         try:
@@ -70,8 +78,20 @@ class ShadowScorer:
                 caps = store.captures_for_visit(self.conn, vid)
                 preds = [self.matcher.predict(c["path"]) for c in caps]
                 cat, conf = identify.fuse_views(preds)
+                named = sum(1 for cid, _ in preds if cid is not None)
                 n = len(caps)
                 nir = sum(1 for c in caps if c.get("is_ir") == 1)
+                # Live promotion: commit the matcher's identity only when it named
+                # a cat across >= min_views frames, the fused confidence clears the
+                # threshold, and no HUMAN has labeled this visit. Writes visits.cat_id
+                # ONLY. Abstains silently otherwise — the box-use safety net is
+                # attribution-independent, so a miss here is never a safety gap.
+                live_written = False
+                if (self.live and cat is not None and named >= self.min_views
+                        and conf >= self.threshold
+                        and store.visit_established_cat(self.conn, vid) is None):
+                    store.set_visit_identity(self.conn, vid, cat, conf)
+                    live_written = True
                 rec = {
                     "ts": datetime.fromtimestamp(self.now()).isoformat(timespec="seconds"),
                     "visit_id": vid,
@@ -79,8 +99,10 @@ class ShadowScorer:
                     "shadow_conf": round(float(conf), 3),
                     "committed_cat_id": committed,
                     "n_frames": n,
+                    "named_views": named,
                     "ir_frac": round(nir / n, 2) if n else 0.0,
                     "agree": (cat is not None and cat == committed),
+                    "live_written": live_written,
                 }
                 _append_jsonl(self.log_path, rec)
                 scored += 1

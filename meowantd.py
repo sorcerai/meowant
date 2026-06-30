@@ -129,7 +129,14 @@ def main():
                 _matcher = make_gallery_matcher(_gal)
                 _slog = config.get(cfg, "identify.shadow_log", "shadow_predictions.jsonl")
                 _sstate = config.get(cfg, "identify.shadow_state", "shadow_state.json")
-                _scorer = ShadowScorer(conn, _matcher, _slog, _sstate)
+                # Live promotion (identify.live_enabled, OFF by default): the matcher
+                # WRITES visits.cat_id on a confident multi-view commit. agy-independent,
+                # so a labeler-backend outage no longer blacks out attribution.
+                _live = config.get(cfg, "identify.live_enabled", False)
+                _scorer = ShadowScorer(
+                    conn, _matcher, _slog, _sstate, live=_live,
+                    min_views=config.get(cfg, "identify.live_min_views", 2),
+                    threshold=config.get(cfg, "identify.live_threshold", 0.0))
                 _cats_by_id = {r[0]: r[1] for r in conn.execute("SELECT id,name FROM cats")}
                 threading.Thread(target=_run_shadow_scorer,
                                  args=(_scorer, config.get(cfg, "identify.shadow_interval_s", 600)),
@@ -138,7 +145,8 @@ def main():
                                  args=(_slog, _cats_by_id, notify_owner,
                                        config.get(cfg, "identify.shadow_report_interval_s", 86400)),
                                  daemon=True).start()
-                print("shadow-matcher: DINOv2 gallery scoring completed visits (shadow; owner daily report)")
+                print(f"shadow-matcher: DINOv2 gallery scoring completed visits "
+                      f"({'LIVE — writing visits.cat_id' if _live else 'shadow-only'}; owner daily report)")
             else:
                 print(f"shadow-matcher: gallery '{_gal}' missing — disabled (run scripts/build_gallery.py)",
                       file=sys.stderr)
