@@ -439,8 +439,10 @@ def main():
         print("heartbeat: external dead-man's-switch ping")
 
     from mw.box_health import BoxHealthWatch
+    # notify_all: box faults/bin-full/UNUSABLE are service calls — the sitter
+    # is the hands during a trip, not just the owner's FYI.
     bhw = BoxHealthWatch(
-        conn, notify_owner,
+        conn, notify_all,
         interval=config.get(cfg, "box_health.check_interval_s", 900),
         renag_hours=config.get(cfg, "box_health.renag_hours", 3),
         unusable_hours=config.get(cfg, "box_health.unusable_hours", 6),
@@ -458,7 +460,7 @@ def main():
             from mw.catfilter import TorchvisionCatFilter
             catfilter = TorchvisionCatFilter()
         jw = JamWatch(
-            conn, catfilter, notify_owner,
+            conn, catfilter, notify_all,   # jammed box needs hands on site
             k=config.get(cfg, "jam_watch.k", 6),
             frames_per_visit=config.get(cfg, "jam_watch.frames_per_visit", 8),
             interval=config.get(cfg, "jam_watch.check_interval_s", 600))
