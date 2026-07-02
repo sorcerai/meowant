@@ -186,6 +186,7 @@ def main():
 
     cams = config.get(cfg, "cameras", [])
     litter_cams = litterbox_cameras(cams, config.get(cfg, "bowls", []))
+    catfilter = None   # shared SSDLite cat detector; created by first consumer
     if litter_cams:
         from mw.capture import CaptureService, ffmpeg_grab, http_grab
         from mw.capture_health import CaptureHealth
@@ -446,6 +447,23 @@ def main():
         approaching_margin=config.get(cfg, "box_health.approaching_margin", 2))
     threading.Thread(target=bhw.run, daemon=True).start()
     print("box-health: bin-full re-nag + UNUSABLE escalation + approaching-full heads-up")
+
+    # Jam detection: box logs eliminated visits, cameras never see a cat ->
+    # drum likely stuck with fault-free firmware (dp22=0), and the deadman is
+    # being pacified by phantom eliminations. Camera-based, so it stays useful
+    # exactly when the box's own fault reporting is blind.
+    if config.get(cfg, "jam_watch.enabled", True):
+        from mw.jam_watch import JamWatch
+        if catfilter is None:
+            from mw.catfilter import TorchvisionCatFilter
+            catfilter = TorchvisionCatFilter()
+        jw = JamWatch(
+            conn, catfilter, notify_owner,
+            k=config.get(cfg, "jam_watch.k", 6),
+            frames_per_visit=config.get(cfg, "jam_watch.frames_per_visit", 8),
+            interval=config.get(cfg, "jam_watch.check_interval_s", 600))
+        threading.Thread(target=jw.run, daemon=True).start()
+        print(f"jam-watch: phantom-visit cross-check (K={jw.k}, every {jw.interval}s)")
 
     # Feeder (Phase 1): local Tuya control + dispense logging + watchdogs.
     feeder_devs = {}
