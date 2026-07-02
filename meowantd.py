@@ -467,6 +467,21 @@ def main():
         threading.Thread(target=jw.run, daemon=True).start()
         print(f"jam-watch: phantom-visit cross-check (K={jw.k}, every {jw.interval}s)")
 
+    # Litter-level watch: dp101 load cell, standby samples only. Sitters get a
+    # top-up ping instead of us discovering a bare pan on camera (Jul 1).
+    if config.get(cfg, "litter.watch_enabled", True):
+        from mw.litter_watch import LitterWatch
+        lw = LitterWatch(
+            conn, lambda: daemon.state, notify_all,
+            low_threshold=config.get(cfg, "litter.low_threshold", 110),
+            consecutive=config.get(cfg, "litter.consecutive_low", 3),
+            rearm_margin=config.get(cfg, "litter.rearm_margin", 40),
+            interval=config.get(cfg, "litter.sample_interval_s", 300),
+            log_path=config.get(cfg, "litter.load_log", "litter_load.jsonl"))
+        threading.Thread(target=lw.run, daemon=True).start()
+        print(f"litter-watch: dp101 low-litter ping (<{lw.low_threshold}, "
+              f"{lw.consecutive}x{lw.interval}s sustained)")
+
     # Feeder (Phase 1): local Tuya control + dispense logging + watchdogs.
     feeder_devs = {}
     feeder_monitors = {}
