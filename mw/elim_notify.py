@@ -15,7 +15,8 @@ _WASTE_MARK = {"pee": " — pee 💧", "poop": " — poop 💩", "uncertain": " 
 
 class EliminationNotifier:
     def __init__(self, conn, labeler, notify, now_fn=time.time,
-                 settle_s=15, interval=30, sample=5, ask_who=None, pee_threshold=80, poop_threshold=130, enabled=True):
+                 settle_s=15, interval=30, sample=5, ask_who=None, pee_threshold=80, poop_threshold=130, enabled=True,
+                 matcher=None, catfilter=None, min_views=2, threshold=0.0):
         self.conn = conn
         self.labeler = labeler            # has .label_visit(vid, sample=...)
         self.notify = notify
@@ -27,6 +28,12 @@ class EliminationNotifier:
         self.pee_threshold = pee_threshold
         self.poop_threshold = poop_threshold
         self.enabled = enabled
+        # Local-first identification: the DINOv2 matcher is fast, on-device and
+        # immune to the agy backend saturating — try it BEFORE the labeler.
+        self.matcher = matcher            # GalleryMatcher or None
+        self.catfilter = catfilter        # has_cat(path) or None
+        self.min_views = min_views        # frames that must name a cat to commit
+        self.threshold = threshold        # min fused confidence to commit
 
     def _waste_mark(self, visit):
         return _WASTE_MARK.get(classify_waste(visit.get("use_record"), self.pee_threshold, self.poop_threshold), "")
@@ -39,18 +46,77 @@ class EliminationNotifier:
             return f"🐈 {cat} used the box{mark} [{when}]"
         return f"🐈 A cat used the box{mark} (couldn't ID — likely in-box) [{when}]"
 
+    def _existing_paths(self, vid):
+        import os
+        return [c["path"] for c in store.captures_for_visit(self.conn, vid)
+                if os.path.exists(c["path"])]
+
+    def _sampled(self, paths):
+        if len(paths) <= self.sample:
+            return paths
+        step = len(paths) / self.sample
+        return [paths[int(i * step)] for i in range(self.sample)]
+
+    def _matcher_fast_id(self, vid):
+        """Local matcher pass over sampled frames; commits visits.cat_id on a
+        confident multi-view hit (never over a human label). Mirrors the live
+        scorer's rules but runs in seconds instead of the 600s sweep."""
+        if self.matcher is None:
+            return
+        from mw.identify import fuse_views
+        preds = []
+        for p in self._sampled(self._existing_paths(vid)):
+            try:
+                preds.append(self.matcher.predict(p))
+            except Exception as e:
+                print(f"[elim-notify] matcher {p} failed: {e}", file=sys.stderr)
+        cat, conf = fuse_views(preds)
+        named = sum(1 for cid, _ in preds if cid is not None)
+        if (cat is not None and named >= self.min_views and conf >= self.threshold
+                and store.visit_established_cat(self.conn, vid) is None):
+            store.set_visit_identity(self.conn, vid, cat, conf)
+
+    def _cat_visible(self, vid):
+        """Any sampled frame shows a cat? None = unknown (no filter/frames)."""
+        if self.catfilter is None:
+            return None
+        paths = self._sampled(self._existing_paths(vid))
+        if not paths:
+            return None
+        for p in paths:
+            try:
+                if self.catfilter.has_cat(p):
+                    return True
+            except Exception:
+                pass
+        return False
+
     def run_once(self):
         before = store._iso(self.now() - self.settle_s)
         for v in store.pending_elimination_notifications(self.conn, before):
-            try:
-                self.labeler.label_visit(v["id"], sample=self.sample)  # fast id
-            except Exception as e:
-                print(f"[elim-notify] label {v['id']} failed: {e}", file=sys.stderr)
-            fresh = store.get_visit(self.conn, v["id"]) or v   # re-read post-label cat_id
+            self._matcher_fast_id(v["id"])                     # local, fast, free
+            fresh = store.get_visit(self.conn, v["id"]) or v
+            if not fresh["cat_id"]:
+                try:
+                    self.labeler.label_visit(v["id"], sample=self.sample)  # fallback
+                except Exception as e:
+                    print(f"[elim-notify] label {v['id']} failed: {e}", file=sys.stderr)
+                fresh = store.get_visit(self.conn, v["id"]) or v
             cat_id = fresh["cat_id"]
             if cat_id:
                 if self.enabled:
                     self.notify(self._alert_text(fresh))
+            elif self._cat_visible(v["id"]) is False:
+                # Frames exist and show NO cat while the box registered a real
+                # elimination: the globe tipped closed around the occupant
+                # (heavy-cat pattern). Photos of a closed white ball are useless
+                # to a human — say what happened instead of asking "who?".
+                if self.enabled:
+                    when = time.strftime("%H:%M", time.localtime(self.now()))
+                    self.notify(
+                        f"🐈 A cat used the box{self._waste_mark(fresh)} — hidden "
+                        f"inside (globe tipped closed, not visible on camera; "
+                        f"likely the heavy one 😼) [{when}]")
             elif self.ask_who is not None:
                 paths = [c["path"] for c in store.captures_for_visit(self.conn, v["id"])]
                 if not paths:

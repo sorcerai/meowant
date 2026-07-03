@@ -128,3 +128,91 @@ def test_disabled_silences_alert_but_marks_notified(tmp_path):
     n.run_once()
     assert sent == []                               # silenced
     assert store.get_visit(conn, v)["notified"] == 1 # but still marked to avoid backlog
+
+
+# ---- globe-tipped era: local matcher first, honest hidden-cat text ---------
+
+class _StubMatcher:
+    """Names `cat_id` on every frame; None = abstain (no crop / closed globe)."""
+    def __init__(self, cat_id, conf=0.9):
+        self.cat_id, self.conf = cat_id, conf
+    def predict(self, path):
+        return (self.cat_id, self.conf if self.cat_id else 0.0)
+
+
+class _StubFilter:
+    def __init__(self, visible):
+        self.visible = visible
+    def has_cat(self, path):
+        return self.visible
+
+
+def _visit_with_frames(conn, tmp_path, n=4):
+    v = store.open_visit(conn, 9_000.0); store.mark_elimination(conn, v, 55)
+    for i in range(n):
+        p = str(tmp_path / f"f{i}.jpg")
+        open(p, "wb").write(b"jpg")
+        store.insert_capture(conn, 9_100.0 + i, v, "cam", p)
+    store.close_visit(conn, v, 9_900.0, 900)
+    return v
+
+
+def test_matcher_fast_path_names_before_labeler(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    ucok = store.cat_id_by_name(conn, "Ucok")
+    sent = []
+    n = EliminationNotifier(conn, _Labeler(conn, None),   # agy finds nothing
+                            notify=sent.append, now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(ucok), catfilter=_StubFilter(True))
+    v = _visit_with_frames(conn, tmp_path)
+    n.run_once()
+    assert len(sent) == 1 and "Ucok" in sent[0]           # matcher named it locally
+    assert store.get_visit(conn, v)["cat_id"] == ucok     # identity persisted
+
+
+def test_hidden_cat_text_when_nothing_visible(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    sent, asked = [], []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(None), catfilter=_StubFilter(False),
+                            ask_who=lambda vid, paths, when, waste='': asked.append(vid))
+    _visit_with_frames(conn, tmp_path)
+    n.run_once()
+    assert asked == []                                    # no useless closed-ball photos
+    assert len(sent) == 1 and "hidden" in sent[0].lower() # honest message instead
+    assert "couldn't ID" not in sent[0]
+
+
+def test_visible_unknown_still_asks_who(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    sent, asked = [], []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(None), catfilter=_StubFilter(True),
+                            ask_who=lambda vid, paths, when, waste='': asked.append(vid))
+    v = _visit_with_frames(conn, tmp_path)
+    n.run_once()
+    assert asked == [v]                                   # photos are useful: ask
+    assert sent == []
+
+
+def test_matcher_never_overrides_human(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella"])
+    ucok = store.cat_id_by_name(conn, "Ucok")
+    ella = store.cat_id_by_name(conn, "Ella")
+    sent = []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(ucok), catfilter=_StubFilter(True))
+    v = _visit_with_frames(conn, tmp_path)
+    cid = store.captures_for_visit(conn, v)[0]["id"]
+    conn.execute("UPDATE captures SET label=?, label_source='human' WHERE id=?", (ella, cid))
+    conn.commit()
+    store.set_visit_identity(conn, v, ella, 1.0)
+    n.run_once()
+    assert store.get_visit(conn, v)["cat_id"] == ella     # human label stands

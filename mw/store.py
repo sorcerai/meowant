@@ -131,6 +131,21 @@ def close_visit(conn, visit_id, leave_ts, duration_s):
         conn.commit()
 
 
+def update_visit_load(conn, visit_id, load):
+    """Fold a dp101 sample into the visit's contents_load_min/max. The load
+    cell reads litter+cat during a visit, so (max - standby baseline) is the
+    cat's mass — the identity signal that works when the globe tips closed
+    and every camera sees only a white sphere."""
+    with _lock:
+        conn.execute(
+            "UPDATE visits SET "
+            "contents_load_min = MIN(COALESCE(contents_load_min, ?), ?), "
+            "contents_load_max = MAX(COALESCE(contents_load_max, ?), ?) "
+            "WHERE id=?",
+            (load, load, load, load, visit_id))
+        conn.commit()
+
+
 def reconcile_open_visits(conn):
     """Close any visit left open (NULL leave_ts) by a prior crash/restart."""
     with _lock:

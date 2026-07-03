@@ -120,6 +120,7 @@ def main():
     # report agreement/disagreements to the OWNER daily — WITHOUT affecting live
     # attribution or alerts. Config-gated + crash-safe (a shadow failure must
     # never destabilize the daemon). Promote to decider only after the trip.
+    gallery_matcher = None   # shared DINOv2 matcher; also elim-notify's fast path
     if config.get(cfg, "identify.shadow_enabled", False):
         try:
             from mw.shadow import ShadowScorer
@@ -127,6 +128,7 @@ def main():
             _gal = config.get(cfg, "identify.gallery_path", "gallery.npz")
             if os.path.exists(_gal):
                 _matcher = make_gallery_matcher(_gal)
+                gallery_matcher = _matcher
                 _slog = config.get(cfg, "identify.shadow_log", "shadow_predictions.jsonl")
                 _sstate = config.get(cfg, "identify.shadow_state", "shadow_state.json")
                 # Live promotion (identify.live_enabled, OFF by default): the matcher
@@ -300,7 +302,13 @@ def main():
             conn, autolabeler, notify=notify_owner,
             pee_threshold=config.get(cfg, "alerts.pee_threshold", 80),
             poop_threshold=config.get(cfg, "alerts.poop_threshold", 130),
-            enabled=config.get(cfg, "alerts.notify_eliminations", True))
+            enabled=config.get(cfg, "alerts.notify_eliminations", True),
+            # Local matcher beats a saturated agy for the fast ID; catfilter
+            # distinguishes "unknown cat in frame" (ask human, photos help)
+            # from "globe tipped closed" (say so, photos are a white ball).
+            matcher=gallery_matcher, catfilter=catfilter,
+            min_views=config.get(cfg, "identify.live_min_views", 2),
+            threshold=config.get(cfg, "identify.live_threshold", 0.0))
         threading.Thread(target=elim_notifier.run, daemon=True).start()
         print("elim-notifier: named 'who used the box' alerts (label-on-leave)")
 

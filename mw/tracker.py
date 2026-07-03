@@ -34,3 +34,9 @@ class VisitTracker:
                   and ev.ts - self._last_closed_ts <= self.grace_seconds):
                 store.mark_elimination(self.conn, self._last_closed_id,
                                        ev.detail.get("use_record"))
+
+    def observe_load(self, dps):
+        """Feed the current poll's dp101 into the open visit (if any). Called
+        every tick; while a cat is inside, the load cell reads litter+cat."""
+        if self._open_id is not None and dps.get("101") is not None:
+            store.update_visit_load(self.conn, self._open_id, dps["101"])

@@ -41,6 +41,7 @@ class Daemon:
                     self.tracker.handle(ev)
                     if self.on_event:
                         self.on_event(ev)
+                self.tracker.observe_load(dps)    # dp101 -> open visit min/max
                 self.prev = {**self.prev, **dps}  # merge: tolerate partial updates
                 self.state = self.prev
                 if self.smartclean.update(self.prev, now):
