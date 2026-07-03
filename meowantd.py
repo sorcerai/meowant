@@ -229,9 +229,28 @@ def main():
             grabber = ffmpeg_grab
             src = "rtsp/ffmpeg"
         from mw.imgutil import is_grayscale
+        from mw.catfilter import TorchvisionCatFilter
+        catfilter = TorchvisionCatFilter()  # shared: preroll gate, labels, scatter, jam-watch
+
+        # Pre-roll ring: the cat is identifiable APPROACHING the box, not
+        # sealed inside it (globe tips closed under Ucok). Buffer warm frames
+        # continuously; on CAT_ENTER the cat-bearing ones join the visit.
+        preroll_ring = None
+        if warm_pool is not None and config.get(cfg, "capture.preroll_enabled", True):
+            from mw.capture import PrerollRing
+            preroll_ring = PrerollRing(
+                [c["name"] for c in litter_cams], "warm_frames",
+                keep_n=config.get(cfg, "capture.preroll_keep_n", 6),
+                catfilter=catfilter)
+            threading.Thread(
+                target=preroll_ring.run,
+                kwargs={"interval_s": config.get(cfg, "capture.preroll_interval_s", 3.0)},
+                daemon=True).start()
 
         cap = CaptureService(
             bus, litter_cams, "gallery/captures", grabber=grabber,
+            preroll=preroll_ring,
+            tail_rounds=config.get(cfg, "capture.tail_rounds", 8),
             frames=config.get(cfg, "capture.frames", 1),
             interval_s=config.get(cfg, "capture.interval_s", 1.5),
             max_frames=config.get(cfg, "capture.max_frames", 12),  # bound disk + agy cost
@@ -285,8 +304,6 @@ def main():
         # defers ambiguous visits to human review — the trust channel.
         from mw.autolabel import AutoLabeler, discover_refs
         from mw.labeler import AgyLabeler, LlamaCppLabeler, FallbackLabeler
-        from mw.catfilter import TorchvisionCatFilter
-        catfilter = TorchvisionCatFilter()  # shared: cat/no-cat for labels + floor-clear for scatter
         _cats = list(store.gallery_counts(conn).keys())
         autolabeler = AutoLabeler(conn, FallbackLabeler(AgyLabeler(timeout=45), LlamaCppLabeler()), discover_refs("gallery", _cats), _cats,
                                   catfilter=catfilter)  # drop empties before agy
