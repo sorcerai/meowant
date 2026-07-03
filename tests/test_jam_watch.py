@@ -48,6 +48,7 @@ class _Notify:
 
 
 def _watch(conn, notify, k=3, **kw):
+    kw.setdefault("lag_s", 0)          # legacy tests: evaluate immediately
     return JamWatch(conn, _FakeFilter(), notify, k=k,
                     now_fn=lambda: 1782583200.0, **kw)
 
@@ -150,6 +151,85 @@ def test_filter_crash_is_not_fatal_counts_as_no_evidence(tmp_path):
     for _ in range(3):
         _elim_visit(tmp_path, conn, with_cat=True)
     n = _Notify()
-    w = JamWatch(conn, _Boom(), n, k=3, now_fn=lambda: 1782583200.0)
+    w = JamWatch(conn, _Boom(), n, k=3, lag_s=0, now_fn=lambda: 1782583200.0)
     w.check_once()                                   # must not raise
     assert len(n.msgs) == 1                          # no evidence -> streak
+
+
+# ---- globe-tipping era fixes: evidence-first, attribution lag, all frames --
+
+def _elim_visit_at(tmp_path, conn, with_cat, ts, n_frames=4, cat_id=None):
+    vid = store.open_visit(conn, ts)
+    conn.execute("UPDATE visits SET eliminated=1, leave_ts=?, cat_id=? WHERE id=?",
+                 (store._iso(ts + 60), cat_id, vid))
+    conn.commit()
+    tag = "cat" if with_cat else "nocat"
+    for i in range(n_frames):
+        p = str(tmp_path / f"v{vid}_{tag}_{i}.jpg")
+        open(p, "wb").write(b"jpg")
+        store.insert_capture(conn, ts, vid, "meowcam1", p)
+    return vid
+
+
+NOW = 1782583200.0
+OLD = NOW - 3600          # closed long ago: attribution has definitely run
+
+
+def test_attributed_visit_is_cat_evidence_without_cameras(tmp_path):
+    """Sealed-globe visit: frames show nothing, but the matcher/agy already
+    named the cat in the DB. Jam-watch must trust that, not its own eyes."""
+    conn = _db(tmp_path)
+    for _ in range(3):
+        _elim_visit_at(tmp_path, conn, with_cat=False, ts=OLD, cat_id=1)
+    n = _Notify()
+    w = _watch(conn, n, k=3)
+    w.check_once()
+    assert n.msgs == []                      # attributed => not phantom
+    assert w.catfilter.calls == 0            # DB evidence: no camera pass needed
+
+
+def test_capture_label_counts_as_evidence(tmp_path):
+    conn = _db(tmp_path)
+    for _ in range(3):
+        vid = _elim_visit_at(tmp_path, conn, with_cat=False, ts=OLD)
+        cid = store.captures_for_visit(conn, vid)[0]["id"]
+        conn.execute("UPDATE captures SET label=2, label_source='auto' WHERE id=?", (cid,))
+        conn.commit()
+    n = _Notify()
+    _watch(conn, n, k=3).check_once()
+    assert n.msgs == []                      # agy named frames: cat was there
+
+
+def test_young_visits_wait_for_attribution(tmp_path):
+    """A visit closed seconds ago hasn't been scored yet — evaluating it now
+    would count a soon-to-be-named visit as phantom. Defer, keep cursor."""
+    conn = _db(tmp_path)
+    for _ in range(3):
+        _elim_visit_at(tmp_path, conn, with_cat=False, ts=NOW - 120)  # 1 min old
+    n = _Notify()
+    w = _watch(conn, n, k=3, lag_s=1200)
+    w.check_once()
+    assert n.msgs == [] and w._streak() == 0    # nothing evaluated yet
+    w2 = JamWatch(conn, w.catfilter, n, k=3, lag_s=1200,
+                  now_fn=lambda: NOW + 3600)    # later: visits now old enough
+    w2.check_once()
+    assert len(n.msgs) == 1                     # evaluated and correctly flagged
+
+
+def test_cat_in_last_frame_is_found(tmp_path):
+    """Entry/exit visibility: cat appears in ONE late frame of many. The old
+    8-frame sample missed it; the sweep must check every existing frame."""
+    conn = _db(tmp_path)
+    for _ in range(3):
+        vid = store.open_visit(conn, OLD)
+        conn.execute("UPDATE visits SET eliminated=1, leave_ts=? WHERE id=?",
+                     (store._iso(OLD + 60), vid))
+        conn.commit()
+        for i in range(36):
+            tag = "cat" if i == 35 else "nocat"
+            p = str(tmp_path / f"v{vid}_{tag}_{i}.jpg")
+            open(p, "wb").write(b"jpg")
+            store.insert_capture(conn, OLD, vid, "meowcam1", p)
+    n = _Notify()
+    _watch(conn, n, k=3).check_once()
+    assert n.msgs == []                      # late-frame cat found => no alert
