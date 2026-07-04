@@ -30,8 +30,10 @@ from mw.smartclean import SmartClean
 from mw.api import create_app
 
 
-def _run_pruner(conn, gallery_dir, interval_s=86400, startup_delay_s=60):
-    """Delete auto-none captures (examined, no cat) from disk + DB daily."""
+def _run_pruner(conn, gallery_dir, roi_cropper=None, interval_s=86400, startup_delay_s=60):
+    """Delete auto-none captures (examined, no cat) from disk + DB daily; also
+    ages out stale ROI-cropped cache files in the same periodic pass so
+    roi_cache/ doesn't grow forever."""
     time.sleep(startup_delay_s)
     while True:
         paths = store.pop_empty_captures(conn)
@@ -45,6 +47,8 @@ def _run_pruner(conn, gallery_dir, interval_s=86400, startup_delay_s=60):
                 pass
         if deleted:
             print(f"[pruner] removed {deleted} empty captures")
+        if roi_cropper is not None:
+            roi_cropper.prune()
         time.sleep(interval_s)
 
 
@@ -95,9 +99,6 @@ def main():
     from mw import cat_status
     cat_status.load_thresholds(cfg)
 
-    threading.Thread(target=_run_pruner, args=(conn, "."),
-                     daemon=True).start()
-
     device = TuyaDevice(cfg)
     sc = SmartClean(
         idle_seconds=config.get(cfg, "smartclean.idle_seconds", 60),
@@ -116,6 +117,19 @@ def main():
     alerts = Alerts(bus, notify=notify_owner)
     threading.Thread(target=alerts.run, daemon=True).start()
 
+    # Per-camera ROI: crop frames to the litterbox region before ID so an
+    # in-frame bystander (Ucok at the bowl on meowcam3) can't steal a visit.
+    # Built early — the shadow-matcher and jam-watch wiring below need it too.
+    from mw.roi import RoiCropper, RoiMatcher, RoiCatFilter, load_rois
+    cams = config.get(cfg, "cameras", [])
+    rois = load_rois(cams)
+    roi_cropper = RoiCropper(rois)
+    if rois:
+        print(f"roi: label region restricted for {sorted(rois)}")
+
+    threading.Thread(target=_run_pruner, args=(conn, ".", roi_cropper),
+                     daemon=True).start()
+
     # Shadow matcher: score completed visits with the DINOv2 gallery matcher and
     # report agreement/disagreements to the OWNER daily — WITHOUT affecting live
     # attribution or alerts. Config-gated + crash-safe (a shadow failure must
@@ -128,7 +142,10 @@ def main():
             _gal = config.get(cfg, "identify.gallery_path", "gallery.npz")
             if os.path.exists(_gal):
                 _matcher = make_gallery_matcher(_gal)
-                gallery_matcher = _matcher
+                # ROI-wrap the shared matcher: this is the single choke point
+                # every consumer (shadow scorer, elim-notify) sees the box
+                # region through, never the full frame with the bowl in it.
+                gallery_matcher = RoiMatcher(_matcher, roi_cropper)
                 _slog = config.get(cfg, "identify.shadow_log", "shadow_predictions.jsonl")
                 _sstate = config.get(cfg, "identify.shadow_state", "shadow_state.json")
                 # Live promotion (identify.live_enabled, OFF by default): the matcher
@@ -136,7 +153,7 @@ def main():
                 # so a labeler-backend outage no longer blacks out attribution.
                 _live = config.get(cfg, "identify.live_enabled", False)
                 _scorer = ShadowScorer(
-                    conn, _matcher, _slog, _sstate, live=_live,
+                    conn, gallery_matcher, _slog, _sstate, live=_live,
                     min_views=config.get(cfg, "identify.live_min_views", 2),
                     threshold=config.get(cfg, "identify.live_threshold", 0.0))
                 _cats_by_id = {r[0]: r[1] for r in conn.execute("SELECT id,name FROM cats")}
@@ -186,15 +203,8 @@ def main():
         threading.Thread(target=analyst.run, daemon=True).start()
         print("weekly-analyst: per-cat 7d consolidation + LLM gatekeeper (shadow: %s)" % analyst.shadow)
 
-    cams = config.get(cfg, "cameras", [])
     litter_cams = litterbox_cameras(cams, config.get(cfg, "bowls", []))
     catfilter = None   # shared SSDLite cat detector; created by first consumer
-    # Per-camera ROI: crop frames to the litterbox region before ID so an
-    # in-frame bystander (Ucok at the bowl on meowcam3) can't steal a visit.
-    from mw.roi import RoiCropper, load_rois
-    roi_cropper = RoiCropper(load_rois(cams))
-    if load_rois(cams):
-        print(f"roi: label region restricted for {sorted(load_rois(cams))}")
     if litter_cams:
         from mw.capture import CaptureService, ffmpeg_grab, http_grab
         from mw.capture_health import CaptureHealth
@@ -324,16 +334,27 @@ def main():
         from mw.elim_notify import EliminationNotifier
         elim_notifier = EliminationNotifier(
             conn, autolabeler, notify=notify_owner,
+            # Outlast the exit-tail capture (tail_rounds @ interval_s) plus
+            # margin, so the fast-ID sample isn't racing frames still being
+            # written — settle_s=15 was tuned for the pre-tail capture window.
+            settle_s=config.get(cfg, "alerts.elim_settle_s",
+                                 max(30, int(config.get(cfg, "capture.tail_rounds", 8))
+                                     * float(config.get(cfg, "capture.interval_s", 1.5)) + 15)),
             pee_threshold=config.get(cfg, "alerts.pee_threshold", 80),
             poop_threshold=config.get(cfg, "alerts.poop_threshold", 130),
             enabled=config.get(cfg, "alerts.notify_eliminations", True),
             # Local matcher beats a saturated agy for the fast ID; catfilter
             # distinguishes "unknown cat in frame" (ask human, photos help)
             # from "globe tipped closed" (say so, photos are a white ball).
+            # matcher is pre-ROI-wrapped (gallery_matcher above); catfilter is
+            # deliberately the RAW (un-cropped) detector — it answers "would
+            # this photo help a HUMAN", and a human sees the full frame.
             matcher=gallery_matcher, catfilter=catfilter,
             min_views=config.get(cfg, "identify.live_min_views", 2),
             threshold=config.get(cfg, "identify.live_threshold", 0.0),
-            roi_cropper=roi_cropper)
+            # Shadow trials (identify.live_enabled=false) must never write
+            # visits.cat_id — only the labeler fallback runs in that mode.
+            live=config.get(cfg, "identify.live_enabled", False))
         threading.Thread(target=elim_notifier.run, daemon=True).start()
         print("elim-notifier: named 'who used the box' alerts (label-on-leave)")
 
@@ -493,9 +514,14 @@ def main():
             from mw.catfilter import TorchvisionCatFilter
             catfilter = TorchvisionCatFilter()
         jw = JamWatch(
-            conn, catfilter, notify_all,   # jammed box needs hands on site
+            # ROI-wrapped: a bowl bystander on meowcam3 must not count as
+            # "cat seen at the box" and mask a real jam.
+            conn, RoiCatFilter(catfilter, roi_cropper), notify_all,   # jammed box needs hands on site
             k=config.get(cfg, "jam_watch.k", 6),
-            frames_per_visit=config.get(cfg, "jam_watch.frames_per_visit", 8),
+            # None = sweep every existing frame, not a fixed sample — the
+            # globe-tipping incident showed a cat visible in as few as 1 of 36
+            # frames; frames_per_visit=8 would have missed it.
+            frames_per_visit=config.get(cfg, "jam_watch.frames_per_visit", None),
             interval=config.get(cfg, "jam_watch.check_interval_s", 600))
         threading.Thread(target=jw.run, daemon=True).start()
         print(f"jam-watch: phantom-visit cross-check (K={jw.k}, every {jw.interval}s)")

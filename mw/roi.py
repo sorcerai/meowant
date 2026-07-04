@@ -20,6 +20,8 @@ through unchanged, so this is a no-op until a camera is configured.
 import os
 import re
 import sys
+import tempfile
+import time
 
 _CAM_RE = re.compile(r"_(meowcam\w+?)_")
 
@@ -65,24 +67,94 @@ class RoiCropper:
     def path_for(self, src_path):
         if not self.roi_map:
             return src_path
+        # Never re-crop our own cached output: a caller composing two
+        # ROI-aware wrappers (e.g. a cropped matcher fed an already-cropped
+        # path) must get it back unchanged, not nested-cropped into a
+        # shrinking, off-center sliver.
+        if os.path.dirname(os.path.abspath(src_path)) == os.path.abspath(self.cache_dir):
+            return src_path
         cam = camera_of(src_path)
         roi = self.roi_map.get(cam) if cam else None
         if roi is None:
             return src_path
         dst = os.path.join(self.cache_dir, "roi_" + os.path.basename(src_path))
+        tmp = None
         try:
             if (os.path.exists(dst)
                     and os.path.getmtime(dst) >= os.path.getmtime(src_path)):
                 return dst                       # cached, still fresh
             from PIL import Image
+            fd, tmp = tempfile.mkstemp(dir=self.cache_dir, suffix=".tmp")
+            os.close(fd)
             with Image.open(src_path) as im:
                 im = im.convert("RGB")
                 w, h = im.size
                 x0, y0, x1, y1 = roi
                 box = (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
-                im.crop(box).save(dst)
+                # save() can't infer a format from the ".tmp" extension —
+                # name it explicitly (captures are always JPEG).
+                im.crop(box).save(tmp, format="JPEG")
+            os.replace(tmp, dst)   # atomic: a reader never sees a half-written crop
             return dst
         except Exception as e:
             print(f"[roi] crop {src_path} failed ({e}); using full frame",
                   file=sys.stderr)
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
             return src_path
+
+    def prune(self, max_age_days=7):
+        """Delete cached crops untouched for max_age_days. Runs in the daily
+        maintenance loop alongside the empty-capture pruner; a bad cache_dir
+        or a permission error must never take that loop down."""
+        try:
+            if not os.path.isdir(self.cache_dir):
+                return
+            cutoff = time.time() - max_age_days * 86400
+            for name in os.listdir(self.cache_dir):
+                p = os.path.join(self.cache_dir, name)
+                try:
+                    if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
+                        os.remove(p)
+                except OSError:
+                    pass
+        except Exception as e:
+            print(f"[roi] prune failed ({e})", file=sys.stderr)
+
+
+class RoiMatcher:
+    """Wraps a gallery matcher so EVERY predict() is forced through the ROI
+    crop first. This is the single choke point for attribution: any consumer
+    holding this object, however it got it, can only ever see the box
+    region — not a per-call opt-in a future consumer can forget."""
+
+    def __init__(self, matcher, cropper):
+        self.matcher = matcher
+        self.cropper = cropper
+
+    def predict(self, path):
+        return self.matcher.predict(self.cropper.path_for(path))
+
+
+class RoiCatFilter:
+    """Wraps a CatFilter so has_cat() (presence/attribution) is ROI-cropped,
+    while is_clear() (the floor/scatter check) sees the ORIGINAL full frame —
+    cropping to the box would hide scatter lying outside it. Unrecognized
+    attributes delegate to the wrapped filter, so this drops in wherever a
+    plain CatFilter is expected."""
+
+    def __init__(self, catfilter, cropper):
+        self.catfilter = catfilter
+        self.cropper = cropper
+
+    def has_cat(self, path):
+        return self.catfilter.has_cat(self.cropper.path_for(path))
+
+    def is_clear(self, path):
+        return self.catfilter.is_clear(path)
+
+    def __getattr__(self, name):
+        return getattr(self.catfilter, name)

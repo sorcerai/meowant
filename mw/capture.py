@@ -48,14 +48,17 @@ class PrerollRing:
     moments are walking up (before dp24 fires) and climbing out (after). This
     ring keeps the last `keep_n` warm frames per camera; on CAT_ENTER the
     CaptureService flushes it into the visit, so the visit's dataset contains
-    the cat even when the visit itself hides it. Frames without a detectable
-    cat are dropped at flush (catfilter) — the trigger records the CAT, not
-    another empty-box shot."""
+    the cat even when the visit itself hides it. Cat-filtering happens once,
+    in CaptureService._flush_preroll, AFTER the bytes are already written to
+    their real destination — the ring itself does no filtering or I/O beyond
+    buffering, so a frame is never written twice."""
 
     def __init__(self, cam_names, warm_dir, keep_n=6, catfilter=None):
         self.cam_names = list(cam_names)
         self.warm_dir = warm_dir
         self.keep_n = max(1, keep_n)
+        # Kept for back-compat with existing callers/wiring; the ring no
+        # longer consults it in flush() — see CaptureService.preroll_catfilter.
         self.catfilter = catfilter
         self._buf = {c: [] for c in self.cam_names}   # cam -> [(ts, bytes)]
         self._lock = threading.Lock()
@@ -76,26 +79,16 @@ class PrerollRing:
                 del buf[:-self.keep_n]
 
     def flush(self):
-        """Drain the ring -> [(cam, ts, bytes)] of frames that show a cat.
-        Clears the buffer so one approach never feeds two visits."""
+        """Drain the ring -> [(cam, ts, bytes)] of ALL buffered frames, oldest
+        first. Clears the buffer so one approach never feeds two visits. No
+        filtering here — the caller writes bytes to their real destination
+        first, then gates on the real file (see CaptureService._flush_preroll)
+        instead of a throwaway tempfile copy."""
         with self._lock:
             drained = {c: list(b) for c, b in self._buf.items()}
             for b in self._buf.values():
                 b.clear()
-        out = []
-        for cam, frames in drained.items():
-            for ts, data in frames:
-                if self.catfilter is not None:
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(suffix=".jpg") as tf:
-                        tf.write(data)
-                        tf.flush()
-                        try:
-                            if not self.catfilter.has_cat(tf.name):
-                                continue
-                        except Exception:
-                            continue
-                out.append((cam, ts, data))
+        out = [(cam, ts, data) for cam, frames in drained.items() for ts, data in frames]
         out.sort(key=lambda e: e[1])
         return out
 
@@ -112,7 +105,8 @@ class CaptureService:
     def __init__(self, bus, cameras, out_dir, grabber=ffmpeg_grab, on_capture=None,
                  frames=1, interval_s=3.0, sleep=time.sleep, visit_resolver=None,
                  presence_fn=None, max_frames=30, max_concurrent=2,
-                 grab_retries=1, retry_backoff_s=0.5, preroll=None, tail_rounds=0):
+                 grab_retries=1, retry_backoff_s=0.5, preroll=None, tail_rounds=0,
+                 preroll_catfilter=None):
         self.bus = bus
         self.cameras = cameras
         self.out_dir = out_dir
@@ -131,13 +125,22 @@ class CaptureService:
         self.grab_retries = max(0, grab_retries)   # extra attempts on transient failure
         self.retry_backoff_s = retry_backoff_s
         self.preroll = preroll              # PrerollRing: approach frames -> visit
+        # Explicit filter for preroll gating; falls back to preroll.catfilter so
+        # existing `PrerollRing(..., catfilter=catfilter)` wiring keeps working
+        # without callers having to pass it here too.
+        self.preroll_catfilter = preroll_catfilter
         self.tail_rounds = max(0, tail_rounds)  # exit shots after presence ends
         os.makedirs(out_dir, exist_ok=True)
         self._q = bus.subscribe()
 
     def _flush_preroll(self, visit_id):
-        """Write the ring's cat-bearing approach frames into out_dir and
-        register them on this visit with their ORIGINAL timestamps."""
+        """Write the ring's buffered approach frames into out_dir (once) and
+        register the cat-bearing ones on this visit with their ORIGINAL
+        timestamps. Writes bytes to their real destination FIRST, then gates
+        on that real file — no throwaway tempfile copy, no double write. A
+        filter crash fails OPEN (keeps the frame): these are often the only
+        identifiable frames of the whole visit, so losing them to a filter
+        bug is worse than passing one through unfiltered."""
         if self.preroll is None:
             return
         try:
@@ -145,6 +148,7 @@ class CaptureService:
         except Exception as e:
             print(f"[capture] preroll flush failed: {e}", file=sys.stderr)
             return
+        catfilter = self.preroll_catfilter or getattr(self.preroll, "catfilter", None)
         for j, (cam, ts, data) in enumerate(entries):
             path = os.path.join(self.out_dir, f"{int(ts)}_{cam}_pre{j}.jpg")
             try:
@@ -153,6 +157,19 @@ class CaptureService:
             except OSError as e:
                 print(f"[capture] preroll write failed: {e}", file=sys.stderr)
                 continue
+            if catfilter is not None:
+                try:
+                    has_cat = catfilter.has_cat(path)
+                except Exception as e:
+                    print(f"[capture] preroll catfilter failed on {path}: "
+                          f"{e}; keeping frame", file=sys.stderr)
+                    has_cat = True         # fail OPEN
+                if not has_cat:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                    continue
             if self.on_capture:
                 self.on_capture(cam, path, ts, visit_id)
 
@@ -207,20 +224,33 @@ class CaptureService:
         # Pin the visit id NOW, while the visit is open. Grabs may outlast the
         # visit, so resolving per-grab would NULL or mis-attribute the frames.
         visit_id = self.visit_resolver() if self.visit_resolver else None
-        self._flush_preroll(visit_id)        # approach frames: cat BEFORE entry
+        # Round 0 FIRST (zero delay for a brief visitor), then drain the
+        # pre-roll ring IMMEDIATELY: the ring keeps polling in its own thread
+        # during the visit, so waiting until the loop ends would let a long
+        # visit cycle the ring (keep_n×interval ≈ 18s of history) and evict
+        # the approach frames — the only identifiable shots of a sealed-globe
+        # visit. Pre-roll frames carry their ORIGINAL (past) timestamps, so
+        # the flush position doesn't affect attribution.
         i = 0
         while True:
             ts = time.time()                 # real time per round (pose-over-time)
             self._grab_round(ts, i, visit_id)
             i += 1
+            if i == 1:
+                self._flush_preroll(visit_id)  # approach frames: cat BEFORE entry
             if not self._continue(i):
                 break
             self._sleep(self.interval_s)     # brief gap, then grab again
+        rounds_done = i
         # Exit tail: the cat is most identifiable climbing OUT (the sealed
-        # globe hides everything in between). Same visit id.
-        for t in range(self.tail_rounds):
-            self._sleep(self.interval_s)
-            self._grab_round(time.time(), f"t{t}", visit_id)
+        # globe hides everything in between) — but skip it for a blip (a
+        # sensor twitch that never became a real visit) so tail_rounds×cams
+        # of empty-box grabs don't block the serial event thread for ~24s and
+        # delay the NEXT visit's time-critical entry frames.
+        if rounds_done >= 2:
+            for t in range(self.tail_rounds):
+                self._sleep(self.interval_s)
+                self._grab_round(time.time(), f"t{t}", visit_id)
 
     def run_once(self):
         while True:

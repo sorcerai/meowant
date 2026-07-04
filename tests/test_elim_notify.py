@@ -216,3 +216,114 @@ def test_matcher_never_overrides_human(tmp_path):
     store.set_visit_identity(conn, v, ella, 1.0)
     n.run_once()
     assert store.get_visit(conn, v)["cat_id"] == ella     # human label stands
+
+
+# ---- F1: live gate ----------------------------------------------------------
+
+def test_live_false_never_writes_cat_id_even_on_confident_matcher(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    ucok = store.cat_id_by_name(conn, "Ucok")
+    sent = []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(ucok, conf=0.99),
+                            catfilter=_StubFilter(True), live=False)
+    v = _visit_with_frames(conn, tmp_path)
+    n.run_once()
+    assert store.get_visit(conn, v)["cat_id"] is None      # shadow-only: never commits
+    assert any("couldn't ID" in m for m in sent)
+
+
+# ---- F2: no clobber, no wasted work on an already-attributed visit ----------
+
+class _CountingMatcher(_StubMatcher):
+    def __init__(self, cat_id, conf=0.9):
+        super().__init__(cat_id, conf)
+        self.calls = 0
+    def predict(self, path):
+        self.calls += 1
+        return super().predict(path)
+
+
+def test_already_attributed_visit_skips_matcher(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    ucok = store.cat_id_by_name(conn, "Ucok")
+    matcher = _CountingMatcher(ucok)
+    sent = []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0,
+                            matcher=matcher, catfilter=_StubFilter(True))
+    v = _visit_with_frames(conn, tmp_path)
+    store.set_visit_identity(conn, v, ucok, 1.0)   # already attributed (e.g. by agy)
+    n.run_once()
+    assert matcher.calls == 0                       # never ran — wasted work avoided
+    assert len(sent) == 1 and "Ucok" in sent[0]
+
+
+def test_fast_path_never_overwrites_existing_auto_cat_id(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok", "Ella"])
+    ucok = store.cat_id_by_name(conn, "Ucok")
+    ella = store.cat_id_by_name(conn, "Ella")
+    sent = []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(ella), catfilter=_StubFilter(True))
+    v = _visit_with_frames(conn, tmp_path)
+    store.set_visit_identity(conn, v, ucok, 0.8)   # existing 'auto' attribution (restart backlog)
+    n.run_once()
+    assert store.get_visit(conn, v)["cat_id"] == ucok      # not clobbered by ella
+
+
+# ---- F6: per-frame provenance -----------------------------------------------
+
+def test_fast_path_writes_per_frame_predictions(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    ucok = store.cat_id_by_name(conn, "Ucok")
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=lambda m: None,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(ucok), catfilter=_StubFilter(True))
+    v = _visit_with_frames(conn, tmp_path, n=4)
+    n.run_once()
+    caps = store.captures_for_visit(conn, v)
+    assert all(c["pred"] == ucok for c in caps)
+    assert all(c["pred_conf"] is not None for c in caps)
+
+
+# ---- F4: catfilter errors are "no information", not "no cat" ---------------
+
+class _RaisingFilter:
+    def has_cat(self, path):
+        raise RuntimeError("boom")
+
+
+def test_cat_visible_none_on_all_raising_filter_falls_to_ask_who(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    sent, asked = [], []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(None), catfilter=_RaisingFilter(),
+                            ask_who=lambda vid, paths, when, waste='': asked.append(vid))
+    v = _visit_with_frames(conn, tmp_path)
+    n.run_once()
+    assert asked == [v]           # unknown visibility -> photos may help a human
+    assert sent == []             # no hidden-cat message on mere errors
+
+
+# ---- F5: no hardcoded cat attribution in the hidden-cat message ------------
+
+def test_hidden_cat_text_has_no_hardcoded_attribution(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    sent = []
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=sent.append,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(None), catfilter=_StubFilter(False))
+    _visit_with_frames(conn, tmp_path)
+    n.run_once()
+    assert len(sent) == 1
+    assert "heavy" not in sent[0].lower()

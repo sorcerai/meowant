@@ -10,6 +10,23 @@ def _roi(img, roi):
     return img[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
 
 
+def spread_sample(items, n):
+    """Evenly-spread sample of up to n items, always including the FIRST and
+    LAST element when there are more items than n. A naive int(i*len/n) index
+    formula can never land on the last item — exactly the exit-tail frame that
+    matters most for identification. round(i*(len-1)/(n-1)) hits index 0 and
+    len-1 exactly at i=0 and i=n-1, with the rest spread evenly between."""
+    items = list(items)
+    if n <= 0:
+        return []
+    if len(items) <= n:
+        return items
+    if n == 1:
+        return [items[0]]
+    idx = sorted({round(i * (len(items) - 1) / (n - 1)) for i in range(n)})
+    return [items[j] for j in idx]
+
+
 def is_grayscale(image_path, sat_thresh=10.0):
     """True if the frame is effectively grayscale (IR night mode), False if it
     carries real color, None if unreadable. JPEG color-noise keeps channels from

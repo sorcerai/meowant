@@ -9,6 +9,7 @@ It's a FILTER (favor recall): keep anything that might be a cat; the agy stage
 is the precise one.
 """
 import sys
+import threading
 
 
 class CatFilter:
@@ -54,6 +55,10 @@ class TorchvisionCatFilter(CatFilter):
         self._model = None
         self._device = None
         self._preprocess = None
+        # Guards model load + every forward pass — has_cat/is_clear are now
+        # called concurrently from capture/preroll, autolabel, elim-notify,
+        # and jam-watch threads, but there's one model object on one device.
+        self._lock = threading.Lock()
 
     def _ensure_model(self):
         if self._model is not None:
@@ -70,11 +75,12 @@ class TorchvisionCatFilter(CatFilter):
     def _labels_above(self, image_path, thresh):
         import torch
         from PIL import Image
-        self._ensure_model()
-        img = Image.open(image_path).convert("RGB")
-        x = self._preprocess(img).to(self._device)
-        with torch.no_grad():
-            out = self._model([x])[0]
+        with self._lock:
+            self._ensure_model()
+            img = Image.open(image_path).convert("RGB")
+            x = self._preprocess(img).to(self._device)
+            with torch.no_grad():
+                out = self._model([x])[0]
         return {label for label, score in zip(out["labels"].tolist(), out["scores"].tolist())
                 if score >= thresh}
 

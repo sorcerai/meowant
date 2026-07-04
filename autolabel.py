@@ -11,13 +11,15 @@ on-demand sweeps.
 """
 import argparse
 
-from mw import store
+from mw import store, config
 from mw.labeler import ClaudeCliLabeler, AgyLabeler, LlamaCppLabeler, FallbackLabeler
 from mw.autolabel import AutoLabeler, discover_refs, validate
 from mw.catfilter import TorchvisionCatFilter, NullCatFilter
+from mw.roi import RoiCropper, load_rois
 
 DB = "meowant.db"
 GALLERY = "gallery"
+CONFIG = "config.json"
 
 
 def _make_labeler(backend, model):
@@ -34,7 +36,12 @@ def _setup(backend, model, use_filter=True):
     refs = discover_refs(GALLERY, cats)
     labeler = _make_labeler(backend, model)
     catfilter = TorchvisionCatFilter() if use_filter else NullCatFilter()
-    return conn, AutoLabeler(conn, labeler, refs, cats, catfilter=catfilter), labeler, refs, cats
+    # Same per-camera ROI as the daemon's auto-labeler — without it, a manual
+    # sweep here reintroduces bystander theft (bowl cat stealing box visits).
+    cfg = config.load(CONFIG)
+    roi_cropper = RoiCropper(load_rois(config.get(cfg, "cameras", [])))
+    return conn, AutoLabeler(conn, labeler, refs, cats, catfilter=catfilter,
+                              roi_cropper=roi_cropper), labeler, refs, cats
 
 
 def main():

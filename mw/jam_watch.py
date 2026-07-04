@@ -24,6 +24,7 @@ import sys
 import time
 
 from mw import store
+from mw.imgutil import spread_sample
 
 _STATE_KEY = "jam_watch.state"
 
@@ -83,9 +84,8 @@ class JamWatch:
                for c in caps):
             return True
         paths = [c["path"] for c in caps if os.path.exists(c["path"])]
-        if self.frames_per_visit and len(paths) > self.frames_per_visit:
-            step = len(paths) / self.frames_per_visit
-            paths = [paths[int(i * step)] for i in range(self.frames_per_visit)]
+        if self.frames_per_visit:
+            paths = spread_sample(paths, self.frames_per_visit)
         for p in paths:
             try:
                 if self.catfilter.has_cat(p):
@@ -104,13 +104,9 @@ class JamWatch:
         if ts is None:
             return False
         try:
-            from datetime import datetime
-            closed = datetime.fromisoformat(str(ts)).timestamp()
+            closed = store._parse_ts(str(ts)).timestamp()
         except (TypeError, ValueError):
-            try:
-                closed = float(ts)
-            except (TypeError, ValueError):
-                return False
+            return False
         return (self.now() - closed) < self.lag_s
 
     def check_once(self):
