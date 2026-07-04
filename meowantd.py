@@ -189,6 +189,12 @@ def main():
     cams = config.get(cfg, "cameras", [])
     litter_cams = litterbox_cameras(cams, config.get(cfg, "bowls", []))
     catfilter = None   # shared SSDLite cat detector; created by first consumer
+    # Per-camera ROI: crop frames to the litterbox region before ID so an
+    # in-frame bystander (Ucok at the bowl on meowcam3) can't steal a visit.
+    from mw.roi import RoiCropper, load_rois
+    roi_cropper = RoiCropper(load_rois(cams))
+    if load_rois(cams):
+        print(f"roi: label region restricted for {sorted(load_rois(cams))}")
     if litter_cams:
         from mw.capture import CaptureService, ffmpeg_grab, http_grab
         from mw.capture_health import CaptureHealth
@@ -306,7 +312,8 @@ def main():
         from mw.labeler import AgyLabeler, LlamaCppLabeler, FallbackLabeler
         _cats = list(store.gallery_counts(conn).keys())
         autolabeler = AutoLabeler(conn, FallbackLabeler(AgyLabeler(timeout=45), LlamaCppLabeler()), discover_refs("gallery", _cats), _cats,
-                                  catfilter=catfilter)  # drop empties before agy
+                                  catfilter=catfilter,   # drop empties before agy
+                                  roi_cropper=roi_cropper)  # crop out the bowl
         threading.Thread(
             target=autolabeler.run,
             kwargs={"interval": config.get(cfg, "autolabel.interval_s", 900)},
@@ -325,7 +332,8 @@ def main():
             # from "globe tipped closed" (say so, photos are a white ball).
             matcher=gallery_matcher, catfilter=catfilter,
             min_views=config.get(cfg, "identify.live_min_views", 2),
-            threshold=config.get(cfg, "identify.live_threshold", 0.0))
+            threshold=config.get(cfg, "identify.live_threshold", 0.0),
+            roi_cropper=roi_cropper)
         threading.Thread(target=elim_notifier.run, daemon=True).start()
         print("elim-notifier: named 'who used the box' alerts (label-on-leave)")
 

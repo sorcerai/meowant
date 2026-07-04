@@ -26,13 +26,26 @@ def discover_refs(gallery_dir, cat_names):
 
 class AutoLabeler:
     def __init__(self, conn, labeler, refs, valid_cats, now_fn=time.time,
-                 catfilter=None):
+                 catfilter=None, roi_cropper=None):
         self.conn = conn
         self.labeler = labeler
         self.refs = refs
         self.valid_cats = set(valid_cats)
         self.now = now_fn
         self.catfilter = catfilter or NullCatFilter()  # cheap cat/no-cat pre-filter
+        # Per-camera ROI: hand the model a copy cropped to the litterbox region
+        # so an in-frame bystander (Ucok at the adjacent bowl on meowcam3) is
+        # not in view and can't steal the visit. None = full frame.
+        self.roi_cropper = roi_cropper
+
+    def _view(self, path):
+        """The path the model should classify: ROI-cropped if configured."""
+        if self.roi_cropper is None:
+            return path
+        try:
+            return self.roi_cropper.path_for(path)
+        except Exception:
+            return path
 
     def _process_visit(self, vid, rows, dry_run):
         """Examine one visit's untouched frames. EVERY frame gets a verdict
@@ -52,7 +65,7 @@ class AutoLabeler:
         else:
             cat_rows, empty_rows = [], []
             for r in rows:
-                if self.catfilter.has_cat(r["path"]):
+                if self.catfilter.has_cat(self._view(r["path"])):
                     cat_rows.append(r)
                 else:
                     empty_rows.append(r)
@@ -62,8 +75,15 @@ class AutoLabeler:
         if not cat_rows:
             return {"visit": vid, "status": "empty", "cat": None,
                     "applied": 0, "cats": [], "filtered": len(empty_rows)}
-        # Stage 2 — label the frames that actually contain a cat.
-        preds = self.labeler.predict_visit([r["path"] for r in cat_rows], self.refs)
+        # Stage 2 — label the frames that actually contain a cat. The model sees
+        # the ROI view; results come back keyed by that view path, so map each
+        # verdict back to its ORIGINAL capture row before applying.
+        view_of = {r["path"]: self._view(r["path"]) for r in cat_rows}
+        orig_of = {v: p for p, v in view_of.items()}
+        preds = self.labeler.predict_visit([view_of[r["path"]] for r in cat_rows],
+                                           self.refs)
+        for p in preds:                          # rewrite view path -> original
+            p["file"] = orig_of.get(p.get("file"), p.get("file"))
         # A backend failure means our view is incomplete — skip the cat frames
         # WITHOUT marking them, so they retry next sweep (empties already handled).
         if any(p.get("cat") == ERROR for p in preds):

@@ -16,7 +16,8 @@ _WASTE_MARK = {"pee": " — pee 💧", "poop": " — poop 💩", "uncertain": " 
 class EliminationNotifier:
     def __init__(self, conn, labeler, notify, now_fn=time.time,
                  settle_s=15, interval=30, sample=5, ask_who=None, pee_threshold=80, poop_threshold=130, enabled=True,
-                 matcher=None, catfilter=None, min_views=2, threshold=0.0):
+                 matcher=None, catfilter=None, min_views=2, threshold=0.0,
+                 roi_cropper=None):
         self.conn = conn
         self.labeler = labeler            # has .label_visit(vid, sample=...)
         self.notify = notify
@@ -34,6 +35,15 @@ class EliminationNotifier:
         self.catfilter = catfilter        # has_cat(path) or None
         self.min_views = min_views        # frames that must name a cat to commit
         self.threshold = threshold        # min fused confidence to commit
+        self.roi_cropper = roi_cropper    # crop to box region before ID (bowl gate)
+
+    def _view(self, path):
+        if self.roi_cropper is None:
+            return path
+        try:
+            return self.roi_cropper.path_for(path)
+        except Exception:
+            return path
 
     def _waste_mark(self, visit):
         return _WASTE_MARK.get(classify_waste(visit.get("use_record"), self.pee_threshold, self.poop_threshold), "")
@@ -67,7 +77,7 @@ class EliminationNotifier:
         preds = []
         for p in self._sampled(self._existing_paths(vid)):
             try:
-                preds.append(self.matcher.predict(p))
+                preds.append(self.matcher.predict(self._view(p)))
             except Exception as e:
                 print(f"[elim-notify] matcher {p} failed: {e}", file=sys.stderr)
         cat, conf = fuse_views(preds)
@@ -85,7 +95,7 @@ class EliminationNotifier:
             return None
         for p in paths:
             try:
-                if self.catfilter.has_cat(p):
+                if self.catfilter.has_cat(self._view(p)):
                     return True
             except Exception:
                 pass

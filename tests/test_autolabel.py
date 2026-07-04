@@ -391,3 +391,69 @@ def test_label_visit_sample_limits_frames(tmp_path):
     untouched = [c for c in store.captures_for_visit(conn, vid)
                  if c["label"] is None and c["label_source"] is None]
     assert len(untouched) == 10                           # 12 - 2 left for the sweep
+
+
+# ---- ROI: bystander at the in-frame bowl must not steal attribution --------
+
+class _RecordingLabeler:
+    """Records exactly which paths the model was asked to classify, so we can
+    prove the ROI-cropped copy (not the original) reached the backend."""
+    def __init__(self, table):
+        self.table = table
+        self.seen = []
+    def predict_visit(self, frame_paths, refs):
+        self.seen.extend(frame_paths)
+        out = []
+        for p in frame_paths:
+            cat = NONE
+            for key, val in self.table.items():
+                if key in p:
+                    cat = val
+            out.append(_pf(p, cat))
+        return out
+
+
+class _StubCropper:
+    """meowcam3 -> a 'roi/' path that reads as EMPTY (bowl cropped away);
+    other cameras pass through unchanged."""
+    def path_for(self, src):
+        if "meowcam3" in src:
+            return src.replace("_meowcam3_", "_roicam3_")   # no cat-key match
+        return src
+
+
+def _elim_visit(conn, ts=1000.0):
+    vid = store.open_visit(conn, ts)
+    conn.execute("UPDATE visits SET eliminated=1 WHERE id=?", (vid,))
+    conn.commit()
+    return vid
+
+
+def test_roi_cropped_frame_reaches_labeler(tmp_path):
+    conn = _db(tmp_path)
+    vid = _elim_visit(conn)
+    store.insert_capture(conn, 1000.0, vid, "meowcam3", "/g/1000_meowcam3_0.jpg")
+    lab = _RecordingLabeler({"Ucok": "Ucok"})       # would call Ucok on the raw path
+    al = AutoLabeler(conn, lab, refs={}, valid_cats=CATS, roi_cropper=_StubCropper())
+    al.run_once()
+    assert all("_roicam3_" in p for p in lab.seen)  # model saw the cropped copy
+    # bowl cropped away -> no cat named -> visit NOT falsely attributed to Ucok
+    assert store.get_visit(conn, vid)["cat_id"] is None
+
+
+def test_roi_label_applied_to_original_capture_row(tmp_path):
+    """When the ROI view DOES name a cat, the label lands on the real capture
+    row (identified by original path), not the temp cropped path."""
+    conn = _db(tmp_path)
+    vid = _elim_visit(conn)
+    store.insert_capture(conn, 1000.0, vid, "meowcam1", "/g/1000_meowcam1_0.jpg")
+
+    class _Pass:
+        def path_for(self, src):
+            return src.replace("/g/", "/roi/")      # different path, same content
+    lab = _RecordingLabeler({"meowcam1": "Ella"})
+    al = AutoLabeler(conn, lab, refs={}, valid_cats=CATS, roi_cropper=_Pass())
+    al.run_once()
+    row = store.captures_for_visit(conn, vid)[0]
+    assert row["label"] == store.cat_id_by_name(conn, "Ella")   # real row labeled
+    assert store.get_visit(conn, vid)["cat_id"] == store.cat_id_by_name(conn, "Ella")
