@@ -573,6 +573,36 @@ def main():
             feeder_monitors[lbl] = f_mon
             print(f"feeder '{lbl}': local control + dispense logging + watchdogs")
 
+    # Feed-plan sync: hourly cloud meal_plan read -> live mealtimes + config.json,
+    # so editing feed times in the Tuya app updates missed-drop detection without
+    # a manual config edit. Local dp1 (meal_plan) reports None (a Tuya reporting
+    # quirk); the cloud getstatus() is the only reliable read path.
+    if (config.get(cfg, "feed_plan_sync.enabled", True)
+            and feeder_monitors and cfg.get("cloud")):
+        import tinytuya
+        from mw.feed_plan_sync import FeedPlanSync
+        cloud_cfg = cfg["cloud"]
+
+        def fetch_plan(device_id):
+            try:
+                c = tinytuya.Cloud(
+                    apiRegion=cloud_cfg.get("region", "us"),
+                    apiKey=cloud_cfg["api_id"], apiSecret=cloud_cfg["api_secret"],
+                    apiDeviceID=device_id)
+                for item in c.getstatus(device_id).get("result", []):
+                    if item.get("code") == "meal_plan":
+                        return item.get("value")
+                return None
+            except Exception as e:
+                print(f"[feed-plan-sync] cloud fetch failed for {device_id}: {e}", file=sys.stderr)
+                return None
+
+        fps = FeedPlanSync(
+            fetch_plan, feeders_cfg, feeder_monitors, notify_owner, "config.json",
+            interval_s=config.get(cfg, "feed_plan_sync.interval_s", 3600))
+        threading.Thread(target=fps.run, daemon=True).start()
+        print(f"feed-plan-sync: hourly cloud meal_plan -> mealtimes ({len(feeder_monitors)} feeder(s))")
+
     if config.get(cfg, "random_probe.enabled", False):
         from mw.random_probe import RandomProbe
         probe = RandomProbe(
