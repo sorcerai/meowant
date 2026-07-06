@@ -112,7 +112,8 @@ class FeederMonitor:
     """Polls the feeder: logs each new feed, and runs watchdogs."""
     def __init__(self, device, conn, notify, mealtimes=(), now_fn=time.time,
                  poll_interval_s=120, miss_grace_minutes=30, miss_lead_minutes=5,
-                 offline_minutes=30, low_food_levels=("empty", "low"), manual_window_s=600):
+                 offline_minutes=30, low_food_levels=("empty", "low"), manual_window_s=600,
+                 missed_drop_enabled=False, deadman_hours=14, deadman_enabled=True):
         self.device = device
         self.conn = conn
         self.notify = notify
@@ -124,13 +125,17 @@ class FeederMonitor:
         self.offline_minutes = offline_minutes
         self.low_food_levels = set(low_food_levels)
         self.manual_window_s = manual_window_s
-        
+        self.missed_drop_enabled = missed_drop_enabled
+        self.deadman_hours = deadman_hours
+        self.deadman_enabled = deadman_enabled
+
         self.label = self.device.label
         self._last_logged_feed_ts = store.last_feed_event_ts(conn, feeder=self.label)
         self._offline_since = None
         self._offline_alerted = False
         self._hopper_alerted = False
         self._missed_alerted = set()        # {(date_iso, "HH:MM")}
+        self._deadman_alerted = False
         self._expect_manual_until = 0
         self._started = self.now()          # don't alarm meals that closed pre-start
 
@@ -246,6 +251,33 @@ class FeederMonitor:
                 store.log_incident(self.conn, "missed_feed", {"mealtime": hhmm, "feeder": self.label}, "escalated", "failed", "No feed or bowl-rise detected in window")
                 self._missed_alerted.add(key)
 
+    def _check_no_feed(self):
+        """No-feed deadman: alert once if no dispense has landed in `deadman_hours`
+        and the bowl isn't known to still have food. Fail toward alerting — an
+        unreadable or missing bowl_watch does not suppress the alarm."""
+        if not self.deadman_enabled:
+            return
+        last = store.last_feed_event_ts(self.conn, feeder=self.label)
+        baseline = last if last is not None else self._started
+        gap_hours = (self.now() - baseline) / 3600
+        if gap_hours < self.deadman_hours:
+            self._deadman_alerted = False        # re-arm once a feed brings the gap back down
+            return
+
+        if self.bowl_watch is not None:
+            _, state = self.bowl_watch.check_fullness()
+            if state is not None and state != bowl.EMPTY:
+                self._deadman_alerted = False     # bowl has food -> fed regardless of detection
+                return
+
+        if self._deadman_alerted:
+            return
+        if self.notify(f"🚨 Feeder '{self.label}': no feed detected in {int(gap_hours)}h "
+                       f"and the bowl looks empty — check the feeder/hopper.") is not False:
+            self._deadman_alerted = True
+            store.log_incident(self.conn, "no_feed", {"feeder": self.label, "gap_hours": int(gap_hours)},
+                               "escalated", "failed", "No feed detected + bowl empty")
+
     def poll_once(self):
         st = self.device.status()
         self._check_online(bool(st.get("online")))
@@ -253,7 +285,9 @@ class FeederMonitor:
             return
         self._detect_dispense(st)
         self._check_hopper(st.get("food_level"))
-        self._check_missed_drops()
+        if self.missed_drop_enabled:
+            self._check_missed_drops()
+        self._check_no_feed()
 
     def run(self):
         while True:

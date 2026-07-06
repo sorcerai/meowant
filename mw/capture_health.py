@@ -39,7 +39,8 @@ class CaptureHealth:
     def __init__(self, conn, cameras, notify, probe=ffmpeg_probe,
                  now_fn=time.time, settle_seconds=120, max_age_seconds=3600,
                  labeler_settle_seconds=1800, remediator=None,
-                 warm_dir=None, warm_stale_seconds=180):
+                 warm_dir=None, warm_stale_seconds=180,
+                 blackout_ignore_cams=None):
         self.conn = conn
         self.cameras = cameras
         self.notify = notify
@@ -50,6 +51,7 @@ class CaptureHealth:
         self.labeler_settle = labeler_settle_seconds  # grace before flagging the labeler stuck
         self.warm_dir = warm_dir             # warm-frame dir, or None when not using warm readers
         self.warm_stale_s = warm_stale_seconds  # a warm frame older than this is "not fresh"
+        self.blackout_ignore_cams = set(blackout_ignore_cams or [])  # cams excluded from the blackout vote
         self._up = {}                        # cam name -> last known up/down
         self._alerted = set()                # visit ids already alerted (per process)
         self._labeler_alerted = False        # latch so we alert once per stall episode
@@ -103,31 +105,45 @@ class CaptureHealth:
             self._labeler_alerted = False     # backlog cleared — re-arm
 
     def check_warm_frames(self):
-        """Proactive total-blackout guard. If EVERY camera's warm frame is stale
-        past warm_stale_s (or missing), the capture pipeline is producing no fresh
-        frames — per-cat ID is blind. This is the gap behind the 2026-06-28 morning
-        blackout: the warm readers stalled for ~2h and grabs failed silently while
-        the reactive missed-capture guard only fires when an eliminated visit
-        happens to land in its 1h window. Requiring ALL cameras stale makes this
-        immune to one chronically-dead cam (e.g. meowcam4) yet still catches a true
-        blackout. 24/7; latches once per episode, re-arms when any camera goes fresh.
-        The box-USE safety net is sensor-based and unaffected — this flags only the
-        attribution blind spot."""
+        """Proactive total-blackout guard. If EVERY *watched* camera's warm frame
+        is stale past warm_stale_s (or missing), the capture pipeline is
+        producing no fresh frames — per-cat ID is blind. This is the gap behind
+        the 2026-06-28 morning blackout: the warm readers stalled for ~2h and
+        grabs failed silently while the reactive missed-capture guard only
+        fires when an eliminated visit happens to land in its 1h window.
+
+        "Watched" cameras are all cameras except blackout_ignore_cams. The
+        ignore-list exists because a camera on an independent host (e.g.
+        meowcam4, which isn't behind the shared MediaMTX bridge) can stay
+        fresh while every bridge-fed camera goes dark — during the 2026-06-30
+        ~21h bridge outage that single healthy cam silently masked the alert
+        for a full day. Ignored cameras neither trigger nor suppress the
+        alert; they're excluded from the vote entirely. If the ignore-list
+        happens to cover every configured camera, fall back to voting over
+        all cameras so the alert isn't made permanently impossible.
+
+        24/7; latches once per episode, re-arms when any watched camera goes
+        fresh. The box-USE safety net is sensor-based and unaffected — this
+        flags only the attribution blind spot."""
         if not self.warm_dir:
             return                              # not running warm readers -> signal n/a
         now = self.now()
         ages = []
         for cam in self.cameras:
             try:
-                ages.append(now - os.path.getmtime(
-                    os.path.join(self.warm_dir, f"{cam['name']}.jpg")))
+                age = now - os.path.getmtime(
+                    os.path.join(self.warm_dir, f"{cam['name']}.jpg"))
             except OSError:
-                ages.append(None)               # missing frame = blind for that cam
-        if any(a is not None and a <= self.warm_stale_s for a in ages):
-            self._warm_alerted = False          # at least one live camera -> re-arm
+                age = None                      # missing frame = blind for that cam
+            ages.append((cam["name"], age))
+        watched = [(n, a) for n, a in ages if n not in self.blackout_ignore_cams]
+        if not watched:
+            watched = ages                      # ignore-list covers every cam -> fall back
+        if any(a is not None and a <= self.warm_stale_s for _, a in watched):
+            self._warm_alerted = False          # at least one live watched camera -> re-arm
             return
         if not self._warm_alerted:
-            known = [a for a in ages if a is not None]
+            known = [a for _, a in watched if a is not None]
             mins = int((max(known) if known else self.warm_stale_s) / 60)
             self.notify(f"📷 Capture BLIND ~{mins}min — no camera is producing fresh "
                         f"frames; per-cat ID is down (box-use safety net unaffected). "

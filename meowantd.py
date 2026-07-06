@@ -306,6 +306,9 @@ def main():
                                # which would otherwise stat missing files and false-alarm forever.
                                warm_dir=("warm_frames" if warm_pool is not None else None),
                                warm_stale_seconds=config.get(cfg, "capture.warm_stale_seconds", 180),
+                               # A fresh cam on a separate host (meowcam4) must not mask a
+                               # bridge blackout of the rest — exclude it from the vote.
+                               blackout_ignore_cams=config.get(cfg, "capture.blackout_ignore_cams", ["meowcam4"]),
                                remediator=remediator)
         threading.Thread(
             target=health.run,
@@ -567,7 +570,14 @@ def main():
                 poll_interval_s=f_cfg.get("poll_interval_s", 120),
                 miss_grace_minutes=f_cfg.get("miss_grace_minutes", 30),
                 offline_minutes=f_cfg.get("offline_minutes", 30),
-                low_food_levels=f_cfg.get("low_food_levels", ["empty", "low"]))
+                low_food_levels=f_cfg.get("low_food_levels", ["empty", "low"]),
+                # Per-mealtime miss alerts are OFF (schedule sources are unreliable and
+                # detection is sparse -> false MISSED spam). The no-feed deadman is the
+                # robust signal: alert only when nothing has dispensed in N hours AND the
+                # bowl is empty.
+                missed_drop_enabled=f_cfg.get("missed_drop_enabled", False),
+                deadman_enabled=f_cfg.get("deadman_enabled", True),
+                deadman_hours=f_cfg.get("deadman_hours", 14))
             threading.Thread(target=f_mon.run, daemon=True).start()
             feeder_devs[lbl] = f_dev
             feeder_monitors[lbl] = f_mon

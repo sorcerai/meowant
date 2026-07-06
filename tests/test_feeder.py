@@ -138,7 +138,7 @@ def test_missed_drop_fires_after_grace(tmp_path):
     # monitor was watching since before the meal; now = 07:31 -> window closed, no feed -> miss
     clock = [seven - 600]
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
-                      mealtimes=["07:00"], miss_grace_minutes=30)
+                      mealtimes=["07:00"], miss_grace_minutes=30, missed_drop_enabled=True)
     clock[0] = seven + 31 * 60
     m.poll_once()
     assert len(msgs) == 1 and "07:00" in msgs[0] and "missed" in msgs[0].lower()
@@ -154,7 +154,7 @@ def test_missed_drop_silent_for_meal_closed_before_start(tmp_path):
     # monitor STARTS at 07:31 — the 07:00 window already closed, so it could not have
     # watched that meal. It must NOT retroactively alarm (e.g. on every daemon restart).
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: seven + 31 * 60,
-                      mealtimes=["07:00"], miss_grace_minutes=30)
+                      mealtimes=["07:00"], miss_grace_minutes=30, missed_drop_enabled=True)
     m.poll_once()
     assert msgs == []
 
@@ -169,7 +169,7 @@ def test_missed_drop_silent_when_feed_landed(tmp_path):
     msgs = []
     clock = [seven - 600]
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
-                      mealtimes=["07:00"], miss_grace_minutes=30)
+                      mealtimes=["07:00"], miss_grace_minutes=30, missed_drop_enabled=True)
     clock[0] = seven + 31 * 60
     m.poll_once()
     assert msgs == []                                # drop happened -> no alarm
@@ -200,7 +200,7 @@ def test_missed_drop_silent_when_bowl_still_full(tmp_path):
     msgs = []
     clock = [seven - 600]                                    # watching since before the meal
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
-                      mealtimes=["07:00"], miss_grace_minutes=30)
+                      mealtimes=["07:00"], miss_grace_minutes=30, missed_drop_enabled=True)
     m.bowl_watch = _FakeBowl(80.0, bowl.FULL)               # bowl still full at the deadline
     clock[0] = seven + 31 * 60
     m.poll_once()
@@ -219,7 +219,7 @@ def test_missed_drop_silent_when_bowl_has_some_food(tmp_path):
     msgs = []
     clock = [seven - 600]
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
-                      mealtimes=["07:00"], miss_grace_minutes=30)
+                      mealtimes=["07:00"], miss_grace_minutes=30, missed_drop_enabled=True)
     m.bowl_watch = _FakeBowl(12.0, bowl.SOME)
     clock[0] = seven + 31 * 60
     m.poll_once()
@@ -238,7 +238,7 @@ def test_missed_drop_fires_when_bowl_empty(tmp_path):
     msgs = []
     clock = [seven - 600]
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
-                      mealtimes=["07:00"], miss_grace_minutes=30)
+                      mealtimes=["07:00"], miss_grace_minutes=30, missed_drop_enabled=True)
     m.bowl_watch = _FakeBowl(2.0, bowl.EMPTY)
     clock[0] = seven + 31 * 60
     m.poll_once()
@@ -256,7 +256,7 @@ def test_missed_drop_fires_when_bowl_unreadable(tmp_path):
     msgs = []
     clock = [seven - 600]
     m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
-                      mealtimes=["07:00"], miss_grace_minutes=30)
+                      mealtimes=["07:00"], miss_grace_minutes=30, missed_drop_enabled=True)
     m.bowl_watch = _FakeBowl(None, None)                    # grab blocked/unreadable
     clock[0] = seven + 31 * 60
     m.poll_once()
@@ -329,6 +329,122 @@ def test_feed_detected_when_poll_lands_on_done_not_feeding(tmp_path):
     m.poll_once(); m.poll_once(); m.poll_once()
     rows = store.recent_feed_events(conn)
     assert len(rows) == 1                       # the feed (seen only as 'done') is logged
+
+
+def test_deadman_fires_once_when_gap_exceeded_and_bowl_empty(tmp_path):
+    from mw import bowl
+    conn = _db(tmp_path)
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [T]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0], deadman_hours=14)
+    m.bowl_watch = _FakeBowl(2.0, bowl.EMPTY)
+    clock[0] = T + 14 * 3600 + 60                    # just past the deadman threshold
+    m.poll_once()
+    assert len(msgs) == 1 and "no feed" in msgs[0].lower()
+    m.poll_once()                                    # latched -> no re-fire on same gap
+    assert len(msgs) == 1
+
+
+def test_deadman_silent_when_bowl_has_food(tmp_path):
+    from mw import bowl
+    conn = _db(tmp_path)
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [T]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0], deadman_hours=14)
+    m.bowl_watch = _FakeBowl(80.0, bowl.FULL)         # bowl has food -> skip-when-full, not a miss
+    clock[0] = T + 20 * 3600                          # well past the gap
+    m.poll_once()
+    assert msgs == []
+
+
+def test_deadman_silent_when_recent_feed(tmp_path):
+    conn = _db(tmp_path)
+    store.log_feed_event(conn, 1, "scheduled", ts=T, feeder="test_feeder")
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [T]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0], deadman_hours=14)
+    clock[0] = T + 10 * 3600                          # 10h gap, under the 14h threshold
+    m.poll_once()
+    assert msgs == []
+
+
+def test_deadman_rearms_after_new_feed(tmp_path):
+    conn = _db(tmp_path)
+    store.log_feed_event(conn, 1, "scheduled", ts=T, feeder="test_feeder")
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [T]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0], deadman_hours=14)
+    clock[0] = T + 15 * 3600                          # past threshold, no bowl_watch -> fires
+    m.poll_once()
+    assert len(msgs) == 1
+    store.log_feed_event(conn, 1, "scheduled", ts=clock[0], feeder="test_feeder")  # new feed arrives
+    m.poll_once()                                     # gap now ~0 -> re-armed, silent
+    assert len(msgs) == 1
+    clock[0] += 15 * 3600                             # past threshold again from the new feed
+    m.poll_once()
+    assert len(msgs) == 2                             # fires again after re-arm
+
+
+def test_deadman_fires_with_no_bowl_watch(tmp_path):
+    conn = _db(tmp_path)
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [T]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0], deadman_hours=14)
+    assert m.bowl_watch is None
+    clock[0] = T + 15 * 3600                          # past threshold, unknown bowl -> fail toward alerting
+    m.poll_once()
+    assert len(msgs) == 1
+
+
+def test_deadman_no_premature_alert_on_fresh_start(tmp_path):
+    conn = _db(tmp_path)
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: T, deadman_hours=14)
+    m.poll_once()                                     # no history, gap from _started is ~0
+    assert msgs == []
+
+
+def test_missed_drop_disabled_by_default(tmp_path):
+    """Per-mealtime miss detection is noisy (schedules don't match real dispense
+    times) so it must stay off unless explicitly enabled."""
+    from mw import bowl
+    conn = _db(tmp_path)
+    import time as _t
+    lt = _t.localtime(T)
+    seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [seven - 600]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
+                      mealtimes=["07:00"], miss_grace_minutes=30)
+    m.bowl_watch = _FakeBowl(2.0, bowl.EMPTY)          # would normally trigger MISSED
+    clock[0] = seven + 31 * 60
+    m.poll_once()
+    assert msgs == []
+
+
+def test_missed_drop_fires_when_explicitly_enabled(tmp_path):
+    """Guard test: the gated-off method must still work if re-enabled."""
+    from mw import bowl
+    conn = _db(tmp_path)
+    import time as _t
+    lt = _t.localtime(T)
+    seven = _t.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 7, 0, 0, 0, 0, -1))
+    dev = FakeFeederDevice([{"online": True, "food_level": "full", "last_feed": None}])
+    msgs = []
+    clock = [seven - 600]
+    m = FeederMonitor(dev, conn, notify=msgs.append, now_fn=lambda: clock[0],
+                      mealtimes=["07:00"], miss_grace_minutes=30, missed_drop_enabled=True)
+    m.bowl_watch = _FakeBowl(2.0, bowl.EMPTY)
+    clock[0] = seven + 31 * 60
+    m.poll_once()
+    assert len(msgs) == 1 and "missed" in msgs[0].lower()
 
 
 def test_feeding_then_done_logs_one_feed_not_two(tmp_path):

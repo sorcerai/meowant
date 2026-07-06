@@ -268,6 +268,76 @@ def test_warm_check_noop_without_warm_dir(tmp_path):
     assert msgs == []
 
 
+# ---- blackout ignore-list (a fresh cam on a separate bridge must not mask a
+# blackout on the shared bridge) --------------------------------------------
+
+def test_warm_ignored_fresh_cam_does_not_mask_real_blackout(tmp_path):
+    # regression: meowcam4 lives on its own host and stays fresh while the
+    # shared-bridge cams (1,2,3,5,6) all go stale during a real outage. Without
+    # the ignore-list, meowcam4's freshness silently suppressed the alert for
+    # ~21h. With meowcam4 ignored, the alert must fire.
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {
+        "meowcam1": 600, "meowcam2": 600, "meowcam3": 600,
+        "meowcam5": 600, "meowcam6": 600, "meowcam4": 5,
+    })
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam2", "meowcam3",
+                                   "meowcam5", "meowcam6", "meowcam4"),
+                      notify=msgs.append, now_fn=lambda: T, warm_dir=wd,
+                      warm_stale_seconds=180, blackout_ignore_cams=["meowcam4"])
+    h.check_warm_frames()
+    assert len(msgs) == 1 and "blind" in msgs[0].lower()
+
+
+def test_warm_ignore_one_non_ignored_fresh_suppresses_and_rearms(tmp_path):
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {"meowcam1": 5, "meowcam2": 600, "meowcam4": 9000})
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam2", "meowcam4"),
+                      notify=msgs.append, now_fn=lambda: T, warm_dir=wd,
+                      warm_stale_seconds=180, blackout_ignore_cams=["meowcam4"])
+    h.check_warm_frames()
+    assert msgs == []
+
+
+def test_warm_ignored_cam_stale_non_ignored_fresh_no_alert(tmp_path):
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {"meowcam1": 5, "meowcam4": 9000})
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam4"), notify=msgs.append,
+                      now_fn=lambda: T, warm_dir=wd, warm_stale_seconds=180,
+                      blackout_ignore_cams=["meowcam4"])
+    h.check_warm_frames()
+    assert msgs == []
+
+
+def test_warm_empty_ignore_list_behaves_as_before(tmp_path):
+    # explicit empty list == the old all-stale-required behavior: one fresh
+    # cam (even meowcam4) suppresses the alert.
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {"meowcam1": 600, "meowcam4": 5})
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam4"), notify=msgs.append,
+                      now_fn=lambda: T, warm_dir=wd, warm_stale_seconds=180,
+                      blackout_ignore_cams=[])
+    h.check_warm_frames()
+    assert msgs == []
+
+
+def test_warm_ignore_list_covers_every_camera_falls_back_to_all_cams(tmp_path):
+    # if every camera is on the ignore-list, honoring it literally would make
+    # the alert impossible to ever fire -> fall back to considering all cams.
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {"meowcam1": 600, "meowcam2": 600})
+    msgs = []
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam2"), notify=msgs.append,
+                      now_fn=lambda: T, warm_dir=wd, warm_stale_seconds=180,
+                      blackout_ignore_cams=["meowcam1", "meowcam2"])
+    h.check_warm_frames()
+    assert len(msgs) == 1 and "blind" in msgs[0].lower()
+
+
 def test_run_once_isolates_exceptions(tmp_path):
     conn = _db(tmp_path)
     h = CaptureHealth(conn, [{"name": "c", "url": "u"}], notify=lambda m: None,
