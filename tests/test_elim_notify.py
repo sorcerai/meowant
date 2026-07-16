@@ -316,6 +316,72 @@ def test_cat_visible_none_on_all_raising_filter_falls_to_ask_who(tmp_path):
 
 # ---- F5: no hardcoded cat attribution in the hidden-cat message ------------
 
+# ---- never mark_notified on a failed send (Jul 15 regression) -------------
+
+class _FlakyNotify:
+    """Fails the first `fail_times` calls, then delivers."""
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.calls = 0
+        self.msgs = []
+    def __call__(self, msg):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            return False
+        self.msgs.append(msg)
+        return True
+
+
+def test_named_alert_retries_after_failed_send(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    flaky = _FlakyNotify(fail_times=1)
+    n = EliminationNotifier(conn, _Labeler(conn, "Ucok"), notify=flaky,
+                            now_fn=lambda: 10_000.0, settle_s=15)
+    v = store.open_visit(conn, 9_000.0); store.mark_elimination(conn, v, 55)
+    store.close_visit(conn, v, 9_900.0, 900)
+    n.run_once()                                     # send fails
+    assert flaky.msgs == []
+    assert store.get_visit(conn, v)["notified"] == 0  # NOT marked -> will retry
+    n.run_once()                                      # retry: cat_id already set, no re-labeling
+    assert len(flaky.msgs) == 1 and "Ucok" in flaky.msgs[0]
+    assert store.get_visit(conn, v)["notified"] == 1
+    n.run_once()                                       # third pass: no duplicate
+    assert len(flaky.msgs) == 1
+
+
+def test_hidden_cat_alert_retries_after_failed_send(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    flaky = _FlakyNotify(fail_times=1)
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=flaky,
+                            now_fn=lambda: 10_000.0,
+                            matcher=_StubMatcher(None), catfilter=_StubFilter(False))
+    v = _visit_with_frames(conn, tmp_path)
+    n.run_once()
+    assert flaky.msgs == []
+    assert store.get_visit(conn, v)["notified"] == 0
+    n.run_once()
+    assert len(flaky.msgs) == 1 and "hidden" in flaky.msgs[0].lower()
+    assert store.get_visit(conn, v)["notified"] == 1
+
+
+def test_couldnt_id_text_alert_retries_after_failed_send(tmp_path):
+    conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
+    store.seed_cats(conn, ["Ucok"])
+    flaky = _FlakyNotify(fail_times=1)
+    n = EliminationNotifier(conn, _Labeler(conn, None), notify=flaky,
+                            now_fn=lambda: 10_000.0, settle_s=15)
+    v = store.open_visit(conn, 9_000.0); store.mark_elimination(conn, v, 55)
+    store.close_visit(conn, v, 9_900.0, 900)          # no frames -> plain text path
+    n.run_once()
+    assert flaky.msgs == []
+    assert store.get_visit(conn, v)["notified"] == 0
+    n.run_once()
+    assert len(flaky.msgs) == 1 and "couldn't ID" in flaky.msgs[0]
+    assert store.get_visit(conn, v)["notified"] == 1
+
+
 def test_hidden_cat_text_has_no_hardcoded_attribution(tmp_path):
     conn = store.connect(str(tmp_path / "t.db")); store.init_db(conn)
     store.seed_cats(conn, ["Ucok"])

@@ -507,6 +507,59 @@ def main():
     threading.Thread(target=bhw.run, daemon=True).start()
     print("box-health: bin-full re-nag + UNUSABLE escalation + approaching-full heads-up")
 
+    # Alive heartbeat: a daily "all good" ping. If the owner STOPS receiving
+    # it, the alert pipe itself is dead — silence becomes a signal (Jul 15:
+    # a blackout alert fired but died on a transient DNS error, unnoticed).
+    if config.get(cfg, "alive.enabled", True):
+        from mw.alive import AliveHeartbeat
+        ah = AliveHeartbeat(
+            notify_owner,
+            hour_local=config.get(cfg, "alive.hour_local", 9),
+            state_get=lambda k, d=None: store.get_daemon_state(conn, k, d),
+            state_set=lambda k, v: store.set_daemon_state(conn, k, v))
+        threading.Thread(target=ah.run, daemon=True).start()
+        print(f"alive-heartbeat: daily ✅ ping at {ah.hour_local:02d}:00 local")
+
+    # Bridge watch: the camera bridge (Proxmox host) has twice filled its disk
+    # and killed all cameras for hours with no on-box alarm; this watches disk
+    # + MediaMTX publisher count over SSH and auto-heals a dead publisher.
+    if config.get(cfg, "bridge.enabled", False):
+        try:
+            import subprocess as _sp
+            from mw.bridge_watch import BridgeWatch
+            _bhost = config.get(cfg, "bridge.host")
+            _buser = config.get(cfg, "bridge.ssh_user", "aria")
+            if _bhost:
+                def _bridge_run_remote(cmd, _host=_bhost, _user=_buser):
+                    try:
+                        r = _sp.run(
+                            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+                             f"{_user}@{_host}", cmd],
+                            capture_output=True, text=True, timeout=20)
+                        return r.stdout if r.returncode == 0 else None
+                    except Exception as e:
+                        print(f"[bridge-watch] ssh failed: {e}", file=sys.stderr)
+                        return None
+
+                bw = BridgeWatch(
+                    _bridge_run_remote, notify_owner,
+                    disk_warn_pct=config.get(cfg, "bridge.disk_warn_pct", 80),
+                    disk_crit_pct=config.get(cfg, "bridge.disk_crit_pct", 90),
+                    streams_grace_s=config.get(cfg, "bridge.streams_grace_s", 900),
+                    remediate=config.get(cfg, "bridge.remediate", True),
+                    max_remediations_per_day=config.get(cfg, "bridge.max_remediations_per_day", 2),
+                    remediation_cooldown_s=config.get(cfg, "bridge.remediation_cooldown_s", 3600),
+                    interval=config.get(cfg, "bridge.check_interval_s", 300),
+                    state_get=lambda: store.get_daemon_state(conn, "bridge_watch.state", {}),
+                    state_set=lambda s: store.set_daemon_state(conn, "bridge_watch.state", s))
+                threading.Thread(target=bw.run, daemon=True).start()
+                print(f"bridge-watch: disk + publisher health on {_bhost} (auto-heal "
+                      f"{'on' if bw.remediate else 'off'})")
+            else:
+                print("bridge-watch: DISABLED — needs bridge.host", file=sys.stderr)
+        except Exception as e:
+            print(f"bridge-watch: DISABLED — setup failed ({e})", file=sys.stderr)
+
     # Jam detection: box logs eliminated visits, cameras never see a cat ->
     # drum likely stuck with fault-free firmware (dp22=0), and the deadman is
     # being pacified by phantom eliminations. Camera-based, so it stays useful
@@ -734,7 +787,20 @@ def main():
                 if mon: mon.note_manual_feed()
                 return f"🍽️ Dispensed {n} portion(s) to '{lbl}'."
             return f"⚠️ Feed command failed (feeder '{lbl}' unreachable or not found)."
-            
+
+        # Wyze plug power-cycle: built lazily on first use so the daemon never
+        # pays wyze-sdk import/login unless /powercycle is actually invoked.
+        _wyze_plug_box = []
+        def _powercycle(arg=""):
+            from mw.wyze_plug import WyzePlug, powercycle_command
+            wcfg = config.get(cfg, "wyze") or {}
+            if not wcfg.get("plug_name"):
+                return ("⚠️ No wyze.plug_name configured — plug the SC10 into a "
+                        "Wyze plug and set its nickname in config first.")
+            if not _wyze_plug_box:
+                _wyze_plug_box.append(WyzePlug(wcfg))
+            return powercycle_command(_wyze_plug_box[0], arg)
+
         bot = TelegramBot(tg_token, tg_chat, {
             **({"/feed": (lambda arg="": _do_feed(arg)),
                 "/feedstatus": (lambda: "\n\n".join(f"[{lbl}]\n{report.feed_status_text(conn, dev.status())}" for lbl, dev in feeder_devs.items()))}
@@ -742,6 +808,10 @@ def main():
             "/cats": lambda: report.cat_report(conn),
             "/status": lambda: report.status_report(conn, daemon.state),
             "/health": lambda: report.health_report(conn),
+            # Owner-only ACTION: cut power to the SC10 via the Wyze plug for
+            # 10s to force a drum re-home (the drum-jam fix that needed a
+            # sitter drive-over last trip). Deliberately NOT in readonly_cmds.
+            "/powercycle": (lambda arg="": _powercycle(arg)),
             "/incidents": lambda: report.incidents_report(conn),
             "/bowl": lambda: report.bowl_status_text(conn),
             "/weekly": lambda: report.weekly_status_text(conn),

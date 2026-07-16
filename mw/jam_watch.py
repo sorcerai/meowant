@@ -115,10 +115,14 @@ class JamWatch:
             if self._too_young(vid):
                 break                  # ordered by id: everything after is younger
             if self._cat_seen(vid, _cat):
+                cleared = True
                 if st["alerted"]:
-                    self.notify("✅ SC10 jam cleared: a cat is visible at the "
-                                "box again — visit logging looks real.")
-                st.update(streak=0, streak_start=None, alerted=False)
+                    cleared = self.notify("✅ SC10 jam cleared: a cat is visible at the "
+                                          "box again — visit logging looks real.") is not False
+                # streak always resets on cat-seen evidence; "alerted" only clears
+                # once the cleared-send actually goes through, or a failed send
+                # would silently drop back into JAM-latched-forever territory.
+                st.update(streak=0, streak_start=None, alerted=(False if cleared else st["alerted"]))
             else:
                 st["streak"] += 1
                 if st["streak_start"] is None:
@@ -129,14 +133,14 @@ class JamWatch:
             st["cursor"] = vid
         if st["streak"] >= self.k and not st["alerted"]:
             since = st["streak_start"] or "?"
-            self.notify(
-                f"🚨 SC10 may be JAMMED: {st['streak']} consecutive "
-                f"\"eliminated\" visits since {since} with NO cat on any "
-                f"camera. The box is likely stuck mid-cycle while its firmware "
-                f"reports no fault, and the no-go deadman is being reset by "
-                f"phantom visits — it CANNOT alarm until this clears. "
-                f"Check the box / power-cycle it at the plug.")
-            st["alerted"] = True
+            if self.notify(
+                    f"🚨 SC10 may be JAMMED: {st['streak']} consecutive "
+                    f"\"eliminated\" visits since {since} with NO cat on any "
+                    f"camera. The box is likely stuck mid-cycle while its firmware "
+                    f"reports no fault, and the no-go deadman is being reset by "
+                    f"phantom visits — it CANNOT alarm until this clears. "
+                    f"Check the box / power-cycle it at the plug.") is not False:
+                st["alerted"] = True
         self._save(st)
 
     def run(self):

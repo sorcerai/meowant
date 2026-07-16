@@ -96,6 +96,56 @@ def test_make_notify_falls_back_to_macos(monkeypatch):
     assert calls == ["desktop"]
 
 
+# ---- cascade fallback: a failed channel must not eat the alert (Jul 15) ----
+
+def test_cascade_telegram_fails_ntfy_succeeds(monkeypatch):
+    cfg = {"alerts.telegram_bot_token": "T", "alerts.telegram_chat_id": "42",
+           "alerts.ntfy_topic": "topic-x"}
+    ntfy_calls = []
+    notify = make_notify(lambda k: cfg.get(k),
+                         _telegram=lambda m, t, c: False,
+                         _ntfy=lambda m, topic: ntfy_calls.append((m, topic)) or True)
+    assert notify("uh oh") is True
+    assert ntfy_calls == [("uh oh", "topic-x")]
+
+
+def test_cascade_both_channels_fail_macos_best_effort_and_false(monkeypatch):
+    import mw.alerts as alerts
+    cfg = {"alerts.telegram_bot_token": "T", "alerts.telegram_chat_id": "42",
+           "alerts.ntfy_topic": "topic-x"}
+    macos_calls = []
+    monkeypatch.setattr(alerts, "macos_notify", lambda m: macos_calls.append(m))
+    notify = make_notify(lambda k: cfg.get(k),
+                         _telegram=lambda m, t, c: False,
+                         _ntfy=lambda m, topic: False)
+    assert notify("uh oh") is False
+    assert macos_calls == ["uh oh"]           # local best-effort trace still fires
+
+
+def test_cascade_telegram_succeeds_ntfy_not_called():
+    cfg = {"alerts.telegram_bot_token": "T", "alerts.telegram_chat_id": "42",
+           "alerts.ntfy_topic": "topic-x"}
+    ntfy_calls = []
+    notify = make_notify(lambda k: cfg.get(k),
+                         _telegram=lambda m, t, c: True,
+                         _ntfy=lambda m, topic: ntfy_calls.append((m, topic)) or True)
+    assert notify("all good") is True
+    assert ntfy_calls == []                   # short-circuited: never tried
+
+
+def test_cascade_telegram_raises_falls_back_to_ntfy():
+    cfg = {"alerts.telegram_bot_token": "T", "alerts.telegram_chat_id": "42",
+           "alerts.ntfy_topic": "topic-x"}
+    def boom(m, t, c):
+        raise RuntimeError("dns blip")
+    ntfy_calls = []
+    notify = make_notify(lambda k: cfg.get(k),
+                         _telegram=boom,
+                         _ntfy=lambda m, topic: ntfy_calls.append((m, topic)) or True)
+    assert notify("uh oh") is True
+    assert ntfy_calls == [("uh oh", "topic-x")]
+
+
 def test_bin_full_no_longer_instant_alert():
     # BoxHealthWatch owns bin-full messaging now; Alerts must not double-ping it.
     assert alert_message(Event(BIN_FULL, 0.0)) is None

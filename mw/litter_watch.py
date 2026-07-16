@@ -67,12 +67,12 @@ class LitterWatch:
             if st["alerted"] and load >= self.low_threshold + self.rearm_margin:
                 st["alerted"] = False     # genuine refill: re-armed silently
         if st["low_run"] >= self.consecutive and not st["alerted"]:
-            self.notify(
-                f"🪣 Litter running LOW in the litter box (level {load}, "
-                f"threshold {self.low_threshold}). Please top it up to the MAX "
-                f"line on your next visit — low litter makes waste stick and "
-                f"can jam the cleaning cycle (the E1 error again).")
-            st["alerted"] = True
+            if self.notify(
+                    f"🪣 Litter running LOW in the litter box (level {load}, "
+                    f"threshold {self.low_threshold}). Please top it up to the MAX "
+                    f"line on your next visit — low litter makes waste stick and "
+                    f"can jam the cleaning cycle (the E1 error again).") is not False:
+                st["alerted"] = True
         self._save(st)
 
     def run(self):

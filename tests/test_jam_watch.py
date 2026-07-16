@@ -255,6 +255,65 @@ def test_too_young_uses_store_parse_ts_naive_local_convention(tmp_path):
     assert w_outside._too_young(vid) is False        # past the lag window
 
 
+# ---- never latch on a failed send (Jul 15 regression) ---------------------
+
+class _FlakyNotify:
+    """Fails the first `fail_times` calls, then delivers."""
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.calls = 0
+        self.msgs = []
+
+    def __call__(self, msg):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            return False
+        self.msgs.append(msg)
+        return True
+
+
+def test_jam_alert_retries_after_failed_send_persisted(tmp_path):
+    conn = _db(tmp_path)
+    for _ in range(3):
+        _elim_visit(tmp_path, conn, with_cat=False)
+    n = _FlakyNotify(fail_times=1)
+    w = _watch(conn, n, k=3)
+    w.check_once()                                   # send fails: latch must NOT persist
+    assert n.msgs == []
+    # fresh instance, same conn: proves the failed send never wrote alerted=True
+    n2 = _FlakyNotify(fail_times=0)
+    w2 = JamWatch(conn, w.catfilter, n2, k=3, lag_s=0, now_fn=lambda: 1782583200.0)
+    w2.check_once()
+    assert len(n2.msgs) == 1 and "JAM" in n2.msgs[0].upper()   # exactly one delivery
+    w2.check_once()                                  # already alerted -> no repeat
+    assert len(n2.msgs) == 1
+
+
+def test_jam_cleared_message_retries_after_failed_send(tmp_path):
+    conn = _db(tmp_path)
+    for _ in range(3):
+        _elim_visit(tmp_path, conn, with_cat=False)
+    n = _Notify()
+    w = _watch(conn, n, k=3)
+    w.check_once()
+    assert len(n.msgs) == 1                          # JAMMED alert landed
+
+    _elim_visit(tmp_path, conn, with_cat=True)        # cat #1 seen: cleared-send attempt (fails)
+    flaky = _FlakyNotify(fail_times=1)
+    w2 = JamWatch(conn, w.catfilter, flaky, k=3, lag_s=0, now_fn=lambda: 1782583200.0)
+    w2.check_once()
+    assert flaky.msgs == []                           # cleared failed to send this round
+
+    # cat #2 seen: "alerted" must have stayed True (persisted) for this to even
+    # attempt sending "cleared" again — if the failed send had wrongly reset
+    # alerted to False, this visit would trigger no send at all (not-alerted
+    # means nothing to clear) and the assertion below would fail with 0 msgs.
+    _elim_visit(tmp_path, conn, with_cat=True)
+    w3 = JamWatch(conn, w.catfilter, flaky, k=3, lag_s=0, now_fn=lambda: 1782583200.0)
+    w3.check_once()
+    assert len(flaky.msgs) == 1 and "clear" in flaky.msgs[0].lower()   # exactly one delivery
+
+
 def test_cat_in_last_frame_is_found(tmp_path):
     """Entry/exit visibility: cat appears in ONE late frame of many. The old
     8-frame sample missed it; the sweep must check every existing frame."""

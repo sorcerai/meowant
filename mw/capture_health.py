@@ -68,10 +68,11 @@ class CaptureHealth:
                         "stream_down", {"camera": cam["name"]},
                         lambda c=cam: remediation.stream_down_playbook(
                             c["name"], reprobe=lambda: self.probe(c["url"])))
-                else:
-                    self.notify(f"📷 Camera '{cam['name']}' stream DOWN — captures will be lost")
+                elif self.notify(f"📷 Camera '{cam['name']}' stream DOWN — captures will be lost") is False:
+                    continue   # send failed: keep prev state so next poll retries the DOWN alert
             elif prev is False and ok:
-                self.notify(f"📷 Camera '{cam['name']}' stream recovered")
+                if self.notify(f"📷 Camera '{cam['name']}' stream recovered") is False:
+                    continue   # send failed: keep prev state so next poll retries the recovered alert
             self._up[cam["name"]] = ok
 
     def check_missed(self):
@@ -80,10 +81,10 @@ class CaptureHealth:
         before = store._iso(now - self.settle)
         for v in store.eliminated_visits_missing_captures(self.conn, after, before):
             if v["id"] not in self._alerted:
-                self.notify(
-                    f"🚫 Visit {v['id']} logged an elimination but captured 0 frames "
-                    f"— capture pipeline may be down")
-                self._alerted.add(v["id"])
+                if self.notify(
+                        f"🚫 Visit {v['id']} logged an elimination but captured 0 frames "
+                        f"— capture pipeline may be down") is not False:
+                    self._alerted.add(v["id"])
 
     def check_labeler(self):
         """Alert if frames sit completely unprocessed by the auto-labeler past
@@ -97,10 +98,10 @@ class CaptureHealth:
                 self.remediator.handle(
                     "labeler_stall", {"stuck": stuck, "grace_min": mins},
                     lambda: remediation.labeler_stall_playbook(stuck))
-            else:
-                self.notify(f"🏷️ Auto-labeler stalled: {stuck} frame(s) unprocessed "
-                            f">{mins}min — labeler may be down")
-            self._labeler_alerted = True
+                self._labeler_alerted = True
+            elif self.notify(f"🏷️ Auto-labeler stalled: {stuck} frame(s) unprocessed "
+                              f">{mins}min — labeler may be down") is not False:
+                self._labeler_alerted = True
         elif stuck == 0:
             self._labeler_alerted = False     # backlog cleared — re-arm
 
@@ -145,10 +146,10 @@ class CaptureHealth:
         if not self._warm_alerted:
             known = [a for _, a in watched if a is not None]
             mins = int((max(known) if known else self.warm_stale_s) / 60)
-            self.notify(f"📷 Capture BLIND ~{mins}min — no camera is producing fresh "
-                        f"frames; per-cat ID is down (box-use safety net unaffected). "
-                        f"Check the warm-frame readers / daemon.")
-            self._warm_alerted = True
+            if self.notify(f"📷 Capture BLIND ~{mins}min — no camera is producing fresh "
+                           f"frames; per-cat ID is down (box-use safety net unaffected). "
+                           f"Check the warm-frame readers / daemon.") is not False:
+                self._warm_alerted = True
 
     def run_once(self):
         if not self.cameras:

@@ -120,9 +120,10 @@ class EliminationNotifier:
                         print(f"[elim-notify] label {v['id']} failed: {e}", file=sys.stderr)
                     fresh = store.get_visit(self.conn, v["id"]) or v
             cat_id = fresh["cat_id"]
+            sent_ok = True    # default: nothing sent (disabled / ask_who) -> ok to mark
             if cat_id:
                 if self.enabled:
-                    self.notify(self._alert_text(fresh))
+                    sent_ok = self.notify(self._alert_text(fresh)) is not False
             elif self._cat_visible(v["id"]) is False:
                 # Frames exist and show NO cat while the box registered a real
                 # elimination: the globe tipped closed around the occupant
@@ -130,9 +131,9 @@ class EliminationNotifier:
                 # to a human — say what happened instead of asking "who?".
                 if self.enabled:
                     when = time.strftime("%H:%M", time.localtime(self.now()))
-                    self.notify(
+                    sent_ok = self.notify(
                         f"🐈 A cat used the box{self._waste_mark(fresh)} — hidden "
-                        f"inside (globe tipped closed, not visible on camera) [{when}]")
+                        f"inside (globe tipped closed, not visible on camera) [{when}]") is not False
             else:
                 # Either a human might be able to ID from photos, or visibility
                 # is simply unknown (no filter / crashed / no frames) — either
@@ -149,9 +150,15 @@ class EliminationNotifier:
                 when = time.strftime("%H:%M", time.localtime(self.now()))
                 if paths:
                     self.ask_who(v["id"], paths, when, self._waste_mark(fresh))
+                    # ask_who has no success/failure signal — treated as delivered
                 elif self.enabled:
-                    self.notify(self._alert_text(fresh))   # nothing to show — plain text
-            store.mark_notified(self.conn, v["id"])
+                    sent_ok = self.notify(self._alert_text(fresh)) is not False   # nothing to show — plain text
+            # A failed send must NOT mark_notified — the visit stays "pending" so
+            # the next poll retries it (matcher/labeler are idempotent on an
+            # already-attributed visit, so this can't double-label; see
+            # _matcher_fast_id's cat_id guard above).
+            if sent_ok:
+                store.mark_notified(self.conn, v["id"])
 
     def run(self):
         while True:

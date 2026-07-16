@@ -71,16 +71,27 @@ def telegram_notify(msg, token, chat_id):
     return ok_any
 
 
-def make_notify(cfg_get, owner_only=False):
-    """Pick the notify transport from config, best-channel first: Telegram (if a bot
-    token + at least one chat id are set) > ntfy (if a topic is set) > macOS desktop.
+def make_notify(cfg_get, owner_only=False, _telegram=None, _ntfy=None):
+    """Pick the notify transport(s) from config and CASCADE through them so a
+    transient failure on the best channel doesn't silently eat the alert (the
+    Jul 15 incident: a Telegram DNS blip during a real capture blackout, and
+    nothing else was ever tried): Telegram (if a bot token + at least one chat
+    id are set) -> ntfy (if a topic is set) -> macOS desktop, best-effort.
+    Any channel succeeding returns True; if every configured remote channel
+    fails, the macOS notify still fires (so there's at least a local trace)
+    but the overall result is False, so a latching caller knows nothing was
+    actually delivered and should retry.
 
     Recipients = alerts.telegram_chat_id (owner) + alerts.telegram_chat_ids (extra,
     e.g. a sitter while away), deduped, owner first. A single id still works; adding
     a sitter is just appending to telegram_chat_ids in config.
 
     owner_only=True ignores the extra recipients — for routine/technical pings that
-    should reach only the owner, not the sitter (who gets just the important ones)."""
+    should reach only the owner, not the sitter (who gets just the important ones).
+
+    _telegram/_ntfy: injection points for tests (default None -> resolve the
+    module-level telegram_notify/ntfy_notify by name at send time, so
+    monkeypatching those still works as before)."""
     token = cfg_get("alerts.telegram_bot_token")
     primary = cfg_get("alerts.telegram_chat_id")
     extra = [] if owner_only else (cfg_get("alerts.telegram_chat_ids") or [])
@@ -91,12 +102,33 @@ def make_notify(cfg_get, owner_only=False):
         if c and c not in seen:
             seen.add(c)
             recipients.append(c)
-    if token and recipients:
-        return lambda m: telegram_notify(m, token, recipients)
     topic = cfg_get("alerts.ntfy_topic")
-    if topic:
-        return lambda m: ntfy_notify(m, topic)
-    return macos_notify
+
+    if not (token and recipients) and not topic:
+        return macos_notify   # no remote channel configured: local desktop only
+
+    def _cascade(m):
+        if token and recipients:
+            tg = _telegram if _telegram is not None else telegram_notify
+            try:
+                if tg(m, token, recipients) is not False:
+                    return True
+            except Exception as e:
+                print(f"[alert] telegram cascade failed ({e}); msg: {m}")
+        if topic:
+            nf = _ntfy if _ntfy is not None else ntfy_notify
+            try:
+                if nf(m, topic) is not False:
+                    return True
+            except Exception as e:
+                print(f"[alert] ntfy cascade failed ({e}); msg: {m}")
+        try:
+            macos_notify(m)
+        except Exception:
+            pass
+        return False
+
+    return _cascade
 
 
 class Alerts:

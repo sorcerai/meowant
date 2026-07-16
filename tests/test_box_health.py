@@ -104,6 +104,60 @@ def test_fault_silent_and_rearms_when_cleared(tmp_path):
     w.run_once()
     assert msgs == []
 
+# ---- never latch a nag on a failed send (Jul 15 regression) ---------------
+
+def _flaky(fail_times, msgs):
+    calls = {"n": 0}
+    def notify(m):
+        calls["n"] += 1
+        if calls["n"] <= fail_times:
+            return False
+        msgs.append(m)
+        return True
+    return notify
+
+def test_bin_full_nag_retries_after_failed_send_persisted(tmp_path):
+    conn = _db(tmp_path)
+    msgs = []
+    _ev(conn, BIN_FULL, T)
+    w = BoxHealthWatch(conn, _flaky(1, msgs), now_fn=lambda: T, renag_hours=3, unusable_hours=6)
+    w.run_once()                                   # send fails: latch must NOT advance
+    assert msgs == []
+    # fresh instance from the SAME conn: if the latch had persisted despite the
+    # failed send, this would stay silent forever instead of retrying
+    w2 = BoxHealthWatch(conn, _flaky(0, msgs), now_fn=lambda: T, renag_hours=3, unusable_hours=6)
+    w2.run_once()
+    assert len(msgs) == 1 and "bin full" in msgs[0].lower()   # exactly one delivery
+
+def test_fault_nag_retries_after_failed_send_persisted(tmp_path):
+    conn = _db(tmp_path)
+    msgs = []
+    _fault(conn, T, 1)
+    w = BoxHealthWatch(conn, _flaky(1, msgs), now_fn=lambda: T, renag_hours=3, unusable_hours=6)
+    w.run_once()
+    assert msgs == []
+    w2 = BoxHealthWatch(conn, _flaky(0, msgs), now_fn=lambda: T, renag_hours=3, unusable_hours=6)
+    w2.run_once()
+    assert len(msgs) == 1 and "infrared protection" in msgs[0].lower()
+
+def test_approaching_full_retries_after_failed_send_persisted(tmp_path):
+    conn = _db(tmp_path)
+    msgs = []
+    _ev(conn, BIN_CLEAR, T - 1000)
+    for i in range(3): _ev(conn, CLEAN_DONE, T - 900 + i)
+    _ev(conn, BIN_FULL, T - 800)
+    _ev(conn, BIN_CLEAR, T)
+    _ev(conn, CLEAN_DONE, T + 60); _ev(conn, CLEAN_DONE, T + 120)
+    w = BoxHealthWatch(conn, _flaky(1, msgs), now_fn=lambda: T, approaching_margin=1)
+    w.run_once()
+    assert msgs == []
+    w2 = BoxHealthWatch(conn, _flaky(0, msgs), now_fn=lambda: T, approaching_margin=1)
+    w2.run_once()
+    assert len(msgs) == 1 and "getting full" in msgs[0].lower()
+    w2.run_once()                                  # same cycle -> no repeat once it landed
+    assert len(msgs) == 1
+
+
 def test_fault_and_bin_full_both_nag_independently(tmp_path):
     # A box can be both full AND faulted; each must alert (two distinct messages).
     conn = _db(tmp_path); msgs = []; clock = [T]

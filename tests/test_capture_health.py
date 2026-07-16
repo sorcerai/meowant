@@ -338,6 +338,103 @@ def test_warm_ignore_list_covers_every_camera_falls_back_to_all_cams(tmp_path):
     assert len(msgs) == 1 and "blind" in msgs[0].lower()
 
 
+# ---- never latch on a failed send (Jul 15 regression) ---------------------
+
+def test_stream_down_retries_after_failed_send(tmp_path):
+    conn = _db(tmp_path)
+    cams = [{"name": "meowcam1", "url": "rtsp://x/1"}]
+    states = iter([True, False, False, False])   # up, then down, stays down
+    sends = iter([False, False, True])           # DOWN send fails twice, then succeeds
+    msgs = []
+    def notify(m):
+        ok = next(sends)
+        if ok:
+            msgs.append(m)
+        return ok
+    h = CaptureHealth(conn, cams, notify=notify,
+                      probe=lambda url: next(states), now_fn=lambda: T)
+    h.check_streams()   # seed: up
+    h.check_streams()   # up -> down, send fails: must retry, not latch
+    h.check_streams()   # still down, send fails again: retry
+    h.check_streams()   # still down, send finally succeeds
+    assert len(msgs) == 1 and "DOWN" in msgs[0]   # exactly one successful delivery
+
+
+def test_stream_recovered_retries_after_failed_send(tmp_path):
+    conn = _db(tmp_path)
+    cams = [{"name": "meowcam1", "url": "rtsp://x/1"}]
+    states = iter([True, False, True, True])     # up, down, then recovered and stays up
+    sends = iter([False, True])                  # recovered send fails once, then succeeds
+    msgs = []
+    def notify(m):
+        if "recover" not in m.lower():
+            return True                          # the DOWN alert always succeeds here
+        ok = next(sends)
+        if ok:
+            msgs.append(m)
+        return ok
+    h = CaptureHealth(conn, cams, notify=notify,
+                      probe=lambda url: next(states), now_fn=lambda: T)
+    h.check_streams()   # seed: up
+    h.check_streams()   # up -> down
+    h.check_streams()   # down -> up, recovered send fails: must retry
+    h.check_streams()   # still up, recovered send succeeds
+    assert len(msgs) == 1 and "recover" in msgs[0].lower()
+
+
+def test_missed_capture_retries_after_failed_send(tmp_path):
+    conn = _db(tmp_path)
+    _eliminated_visit(conn, T - 1000, T - 900)
+    cams = [{"name": "c", "url": "u"}]
+    sends = iter([False, True])
+    msgs = []
+    def notify(m):
+        ok = next(sends)
+        if ok:
+            msgs.append(m)
+        return ok
+    h = CaptureHealth(conn, cams, notify=notify,
+                      probe=lambda url: True, now_fn=lambda: T, settle_seconds=120)
+    h.check_missed()   # send fails: latch must stay unset
+    h.check_missed()   # send succeeds this time
+    assert len(msgs) == 1   # exactly one successful delivery, no earlier loss
+
+
+def test_labeler_stall_retries_after_failed_send(tmp_path):
+    conn = _db(tmp_path)
+    vid = store.open_visit(conn, T - 5000)
+    store.insert_capture(conn, T - 5000, vid, "c", "/g/x.jpg")
+    sends = iter([False, True])
+    msgs = []
+    def notify(m):
+        ok = next(sends)
+        if ok:
+            msgs.append(m)
+        return ok
+    h = CaptureHealth(conn, [{"name": "c", "url": "u"}], notify=notify,
+                      probe=lambda u: True, now_fn=lambda: T, labeler_settle_seconds=1800)
+    h.check_labeler()   # send fails: latch must stay unset
+    h.check_labeler()   # send succeeds this time
+    assert len(msgs) == 1
+
+
+def test_warm_blackout_retries_after_failed_send(tmp_path):
+    conn = _db(tmp_path)
+    wd = _warm(tmp_path, {"meowcam1": 600, "meowcam2": 600})
+    sends = iter([False, True])
+    msgs = []
+    def notify(m):
+        ok = next(sends)
+        if ok:
+            msgs.append(m)
+        return ok
+    h = CaptureHealth(conn, _cams("meowcam1", "meowcam2"), notify=notify,
+                      now_fn=lambda: T, warm_dir=wd, warm_stale_seconds=180)
+    h.check_warm_frames()   # send fails: latch must stay unset
+    h.check_warm_frames()   # send succeeds this time
+    assert len(msgs) == 1
+
+
 def test_run_once_isolates_exceptions(tmp_path):
     conn = _db(tmp_path)
     h = CaptureHealth(conn, [{"name": "c", "url": "u"}], notify=lambda m: None,

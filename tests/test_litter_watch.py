@@ -102,6 +102,38 @@ def test_latch_survives_restart(tmp_path):
     assert n2.msgs == []                 # still low, already alerted: silent
 
 
+def test_low_alert_retries_after_failed_send_persisted(tmp_path):
+    conn = _db(tmp_path)
+
+    class _Flaky:
+        def __init__(self, fail_times):
+            self.fail_times = fail_times
+            self.calls = 0
+            self.msgs = []
+        def __call__(self, m):
+            self.calls += 1
+            if self.calls <= self.fail_times:
+                return False
+            self.msgs.append(m)
+            return True
+
+    flaky = _Flaky(fail_times=1)
+    w = _watch(tmp_path, conn, flaky, [_standby(96)] * 3)
+    for _ in range(3):
+        w.sample_once()
+    assert flaky.msgs == []                  # send failed: latch must NOT persist as alerted
+
+    # fresh instance, same conn/log: if the failed send had wrongly persisted
+    # "alerted", this would stay silent forever instead of retrying
+    flaky2 = _Flaky(fail_times=0)
+    w2 = _watch(tmp_path, conn, flaky2, [_standby(96)] * 4)
+    for _ in range(3):
+        w2.sample_once()
+    assert len(flaky2.msgs) == 1              # exactly one successful delivery
+    w2.sample_once()
+    assert len(flaky2.msgs) == 1              # already alerted now -> no repeat
+
+
 def test_missing_dp101_is_skipped(tmp_path):
     conn = _db(tmp_path)
     n = _Notify()

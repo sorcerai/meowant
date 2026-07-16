@@ -56,11 +56,12 @@ class BoxHealthWatch:
         summary = decode.fault_summary(bitmap) or f"fault bitmap {bitmap}"
         secs = now - datetime.fromisoformat(onset_iso).timestamp()
         if secs >= self.unusable_s:
-            self.notify(f"🚨 SC10 UNUSABLE {secs / 3600:.0f}h — {summary}. "
-                        f"Cats can't go — fix it NOW.")
+            msg = (f"🚨 SC10 UNUSABLE {secs / 3600:.0f}h — {summary}. "
+                   f"Cats can't go — fix it NOW.")
         else:
-            self.notify(f"🚨 SC10 STUCK — {summary}.")
-        self._fault_last_nag = now
+            msg = f"🚨 SC10 STUCK — {summary}."
+        if self.notify(msg) is not False:
+            self._fault_last_nag = now
 
     def _check(self):
         now = self.now()
@@ -71,11 +72,12 @@ class BoxHealthWatch:
             if now - self._last_nag >= self.renag_s:
                 h = secs / 3600.0
                 if secs >= self.unusable_s:
-                    self.notify(f"🚨 Box UNUSABLE {h:.0f}h — auto-clean blocked, "
-                                f"cats can't go. Empty the bin NOW.")
+                    msg = (f"🚨 Box UNUSABLE {h:.0f}h — auto-clean blocked, "
+                           f"cats can't go. Empty the bin NOW.")
                 else:
-                    self.notify(f"🪣 Litter bin full {h:.0f}h — empty it (auto-clean paused).")
-                self._last_nag = now
+                    msg = f"🪣 Litter bin full {h:.0f}h — empty it (auto-clean paused)."
+                if self.notify(msg) is not False:
+                    self._last_nag = now
             return
         # Bin is clear -> reset the full-nag latch so a future fill nags immediately.
         self._last_nag = 0.0
@@ -91,9 +93,9 @@ class BoxHealthWatch:
                 cleans = store.cleans_since(self.conn, last_clear)
                 if cleans >= cap - self.approaching_margin:
                     left = max(0, cap - cleans)
-                    self.notify(f"🪣 Bin getting full — {cleans} auto-cleans since emptied "
-                                f"(~{left} till full; your box holds ~{cap}). Empty soon.")
-                    self._approach_warned = True
+                    if self.notify(f"🪣 Bin getting full — {cleans} auto-cleans since emptied "
+                                   f"(~{left} till full; your box holds ~{cap}). Empty soon.") is not False:
+                        self._approach_warned = True
 
     def run_once(self):
         self._check()
