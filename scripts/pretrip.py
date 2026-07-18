@@ -144,10 +144,11 @@ def check_cameras(cfg, warm_dir="warm_frames", max_age_s=120,
 # 4. bridge (Proxmox stream bridge: disk + mediamtx)
 # ---------------------------------------------------------------------------
 
-def default_bridge_ssh(host, user, cmd, timeout=15):
+def default_bridge_ssh(host, user, cmd, timeout=60):
     """SSH one command to the bridge host via key auth (BatchMode) — the same
     path bridge-watch and the manual runbook use (aria@bridge, keys already
-    trusted from this Mac). Raises on transport/exit failure."""
+    trusted from this Mac). Raises on transport/exit failure. Timeout must
+    outlast the stream sweep (3 cams x 15s ffprobe cap, worst case ~45s)."""
     r = subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
          f"{user}@{host}", cmd],
@@ -163,9 +164,10 @@ def default_http_get(url, timeout=5):
 
 
 def check_bridge(cfg, ssh_runner=None):
-    """Both probes go over SSH: the MediaMTX API (9997) is bound to localhost
-    on the bridge, so the paths check must run ON the bridge via curl — the
-    same route mw.bridge_watch uses."""
+    """Both probes go over SSH and run ON the bridge. Streams are checked by
+    ffprobe-ing each cam's RTSP path (mw.bridge_watch.streams_probe_cmd — the
+    shared probe), NOT the MediaMTX :9997 API, which is disabled in the
+    bridge's mediamtx.yml (`api: false`) and refuses every connection."""
     host = mw_config.get(cfg, "bridge.host", "192.168.2.79")
     user = mw_config.get(cfg, "bridge.ssh_user", "aria")
     ssh_runner = ssh_runner or default_bridge_ssh
@@ -180,16 +182,17 @@ def check_bridge(cfg, ssh_runner=None):
         results.append(("bridge: disk", FAIL, f"ssh probe failed: {e}"))
 
     try:
-        out = ssh_runner(host, user,
-                         "curl -s --max-time 5 http://127.0.0.1:9997/v3/paths/list")
-        data = json.loads(out)
-        items = data.get("items", [])
-        ready = sum(1 for it in items if it.get("ready"))
-        results.append(("bridge: mediamtx paths", ready > 0,
-                         f"{ready}/{len(items)} paths ready"))
+        from mw.bridge_watch import streams_probe_cmd
+        cams = mw_config.get(cfg, "bridge.probe_cams",
+                             ["meowcam1", "meowcam2", "meowcam3"])
+        out = ssh_runner(host, user, streams_probe_cmd(cams))
+        up = [ln for ln in out.split() if ln.strip()]
+        results.append(("bridge: streams", len(up) > 0,
+                         f"{len(up)}/{len(cams)} cams decoding"
+                         f" ({', '.join(up) if up else 'none'})"))
     except Exception as e:
-        results.append(("bridge: mediamtx paths", FAIL,
-                         f"mediamtx probe failed: {e}"))
+        results.append(("bridge: streams", FAIL,
+                         f"stream probe failed: {e}"))
     return results
 
 

@@ -1,11 +1,8 @@
 """Tests for mw.bridge_watch — driven with a scripted fake run_remote + a
 notify recorder + a fixed clock. No real ssh, no real docker."""
-import json
-
 from mw.bridge_watch import BridgeWatch
 
 DISK_CMD = "df --output=pcent / | tail -1"
-STREAMS_CMD = "curl -s --max-time 5 http://127.0.0.1:9997/v3/paths/list"
 RESTART_CMD = "docker restart cryze_v2-cryze_android_app-1"
 
 BASE_T = 1_720_000_000.0
@@ -28,13 +25,13 @@ def make_run_remote(box):
         if cmd == DISK_CMD:
             pct = box.get("disk")
             return None if pct is None else f"{pct}%\n"
-        if cmd == STREAMS_CMD:
+        if "ffprobe" in cmd:                     # the on-bridge stream sweep
             n = box.get("streams")
             if n is None:
-                return None
-            items = [{"id": i, "ready": True} for i in range(n)]
-            items.append({"id": "dead", "ready": False})
-            return json.dumps({"items": items})
+                return None                      # ssh/probe infrastructure failed
+            # n cams answered: the sweep echoes one cam name per up stream.
+            # n == 0 -> "" (a REAL zero, distinct from None).
+            return "".join(f"meowcam{i + 1}\n" for i in range(n))
         if cmd == RESTART_CMD:
             return "ok"
         return None
@@ -223,6 +220,44 @@ def test_next_day_resets_remediation_budget():
     t[0] += 86400                 # next calendar day -> budget resets
     watch.check_once()
     assert box["calls"].count(RESTART_CMD) == 2
+
+
+# ---------------------------------------------------------------------------
+# Stream probe construction / parsing
+# ---------------------------------------------------------------------------
+
+def test_streams_probe_is_ffprobe_sweep_not_dead_api():
+    """The MediaMTX :9997 API is disabled on the bridge (`api: false` in
+    mediamtx.yml) — probing it always got connection-refused and silently
+    disabled the streams check from deployment until 2026-07-17. The probe
+    must ffprobe the RTSP streams themselves and never touch 9997."""
+    box = {"disk": 50, "streams": 2}
+    notifies = []
+    watch, _ = make_watch(box, notifies, probe_cams=["meowcam1", "meowcam9"])
+    cmd = watch._streams_probe_cmd()
+    assert "ffprobe" in cmd
+    assert "rtsp://127.0.0.1:8554/" in cmd
+    assert "meowcam1" in cmd and "meowcam9" in cmd
+    assert "9997" not in cmd
+    # nonzero last-iteration exit must not turn all-cams-down into ssh-failure
+    assert cmd.rstrip().endswith("true")
+
+
+def test_probe_cmd_rejects_shell_metacharacters_in_cam_names():
+    """Cam names interpolate into a remote shell command; anything beyond
+    [A-Za-z0-9_-] must raise locally instead of executing on the bridge."""
+    import pytest
+    from mw.bridge_watch import streams_probe_cmd
+    for evil in (["$(touch /tmp/owned)"], ["meow cam"], ["a;b"], ["ok", ""]):
+        with pytest.raises(ValueError):
+            streams_probe_cmd(evil)
+    assert "meowcam1" in streams_probe_cmd(["meowcam1", "cam_2-b"])
+
+
+def test_parse_ready_count_empty_is_real_zero():
+    assert BridgeWatch._parse_ready_count(None) is None       # probe failed
+    assert BridgeWatch._parse_ready_count("") == 0            # ran, none up
+    assert BridgeWatch._parse_ready_count("meowcam1\nmeowcam3\n") == 2
 
 
 # ---------------------------------------------------------------------------

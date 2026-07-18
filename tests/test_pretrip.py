@@ -202,14 +202,14 @@ def _bridge_cfg(password="secret"):
 
 
 def _bridge_ssh_fake(disk_line="/dev/root 1 1 1 20% /\n",
-                     paths_json='{"items": [{"name": "meowcam1", "ready": true}, '
-                                '{"name": "meowcam2", "ready": true}]}'):
-    """Scripted ssh runner: answers the df probe and the on-bridge curl probe."""
+                     up_cams="meowcam1\nmeowcam2\n"):
+    """Scripted ssh runner: answers the df probe and the on-bridge ffprobe
+    stream sweep (which echoes one cam name per decodable stream)."""
     def runner(host, user, cmd):
         if cmd.startswith("df"):
             return disk_line
-        if "9997" in cmd:
-            return paths_json
+        if "ffprobe" in cmd:
+            return up_cams
         raise AssertionError(f"unexpected cmd: {cmd}")
     return runner
 
@@ -222,28 +222,41 @@ def test_bridge_all_pass():
     by_name = {n: (ok, d) for n, ok, d in results}
     assert by_name["bridge: disk"][0] is True
     assert "20%" in by_name["bridge: disk"][1]
-    assert by_name["bridge: mediamtx paths"][0] is True
-    assert "2/2" in by_name["bridge: mediamtx paths"][1]
+    assert by_name["bridge: streams"][0] is True
+    assert "2/3" in by_name["bridge: streams"][1]
 
 
 def test_bridge_disk_over_threshold_fails():
     cfg = _bridge_cfg()
     runner = _bridge_ssh_fake(
         disk_line="/dev/root       30000000 27000000  3000000  90% /\n",
-        paths_json='{"items": []}')
+        up_cams="")
     results = pretrip.check_bridge(cfg, ssh_runner=runner)
     disk = dict((n, ok) for n, ok, _ in results)["bridge: disk"]
     assert disk is False
 
 
-def test_bridge_no_ready_paths_fails():
+def test_bridge_no_decoding_streams_fails():
     cfg = _bridge_cfg()
-    runner = _bridge_ssh_fake(
-        paths_json='{"items": [{"name": "meowcam1", "ready": false}]}')
+    runner = _bridge_ssh_fake(up_cams="")   # sweep ran, nothing decoded
     results = pretrip.check_bridge(cfg, ssh_runner=runner)
-    mtx = dict((n, (ok, d)) for n, ok, d in results)["bridge: mediamtx paths"]
+    mtx = dict((n, (ok, d)) for n, ok, d in results)["bridge: streams"]
     assert mtx[0] is False
-    assert "0/1" in mtx[1]
+    assert "0/3" in mtx[1]
+
+
+def test_bridge_probe_avoids_disabled_mediamtx_api():
+    """mediamtx.yml on the bridge has `api: false` — :9997 refuses every
+    connection, which silently blinded the old curl-based probe. The check
+    must ffprobe the streams themselves and never touch the API port."""
+    cfg = _bridge_cfg()
+    cmds = []
+    def runner(host, user, cmd):
+        cmds.append(cmd)
+        return "/dev/root 1 1 1 10% /\n" if cmd.startswith("df") else "meowcam1\n"
+    pretrip.check_bridge(cfg, ssh_runner=runner)
+    assert any("ffprobe" in c for c in cmds)
+    assert not any("9997" in c for c in cmds)
 
 
 def test_bridge_ssh_failure_reported_critical():
@@ -254,19 +267,19 @@ def test_bridge_ssh_failure_reported_critical():
     by = dict((n, (ok, d)) for n, ok, d in results)
     assert by["bridge: disk"][0] is False
     assert "connection refused" in by["bridge: disk"][1]
-    assert by["bridge: mediamtx paths"][0] is False   # curl also rides ssh
+    assert by["bridge: streams"][0] is False   # sweep also rides ssh
 
 
-def test_bridge_curl_failure_reported_critical():
+def test_bridge_probe_failure_reported_critical():
     cfg = _bridge_cfg()
     def runner(host, user, cmd):
         if cmd.startswith("df"):
             return "/dev/root 1 1 1 10% /\n"
-        raise TimeoutError("mediamtx unreachable")
+        raise TimeoutError("bridge unreachable")
     results = pretrip.check_bridge(cfg, ssh_runner=runner)
-    mtx = dict((n, (ok, d)) for n, ok, d in results)["bridge: mediamtx paths"]
+    mtx = dict((n, (ok, d)) for n, ok, d in results)["bridge: streams"]
     assert mtx[0] is False
-    assert "mediamtx unreachable" in mtx[1]
+    assert "bridge unreachable" in mtx[1]
 
 
 def test_bridge_uses_key_auth_user_from_config():
@@ -275,7 +288,7 @@ def test_bridge_uses_key_auth_user_from_config():
     seen = []
     def runner(host, user, cmd):
         seen.append((host, user))
-        return "/dev/root 1 1 1 10% /\n" if cmd.startswith("df") else '{"items": []}'
+        return "/dev/root 1 1 1 10% /\n" if cmd.startswith("df") else ""
     pretrip.check_bridge(cfg, ssh_runner=runner)
     assert all(u == "aria" for _h, u in seen)
 

@@ -218,6 +218,11 @@ def main():
         snap_base = config.get(cfg, "capture.snapshot_base", "")
         warm = config.get(cfg, "capture.warm_readers", True)
         warm_pool = None
+        # Keep the ORIGINAL RTSP urls for health probing before any grab-source
+        # rewrite below. CaptureHealth used to receive the rewritten litter_cams,
+        # so in warm-reader mode its "stream probe" ffprobe'd local jpg files —
+        # always up, even through the 24h capture blackout of 2026-07-16.
+        probe_cams = [dict(c) for c in litter_cams]
         if snap_base:
             grabber = http_grab
             base = snap_base.rstrip("/")
@@ -230,7 +235,10 @@ def main():
                 fps=config.get(cfg, "capture.warm_fps", 1.0),
                 # Offload decode to the media engine (Mac Studio: videotoolbox)
                 # so 4 steady readers cost ~no CPU. "" disables.
-                hwaccel=config.get(cfg, "capture.warm_hwaccel", "videotoolbox") or None)
+                hwaccel=config.get(cfg, "capture.warm_hwaccel", "videotoolbox") or None,
+                # Kill+relaunch a reader whose process is alive but whose output
+                # froze (blackholed TCP after a bridge-side MediaMTX restart).
+                stale_after_s=config.get(cfg, "capture.warm_stale_kill_s", 30.0))
             threading.Thread(target=warm_pool.run, daemon=True).start()
             _CLEANUPS.append(warm_pool.stop)   # terminate ffmpeg children on shutdown
             grabber = file_grab
@@ -296,7 +304,7 @@ def main():
         # Make capture failures loud AND remediated: probe streams, guard missed
         # captures, and route detections through the deterministic playbooks
         # (debounce streams, diagnose labeler stalls) -> incidents table + escalate.
-        health = CaptureHealth(conn, litter_cams,
+        health = CaptureHealth(conn, probe_cams,
                                notify=notify_owner,
                                settle_seconds=config.get(cfg, "capture.settle_seconds", 120),
                                # Warm-frame blackout guard: only meaningful when warm
@@ -535,7 +543,9 @@ def main():
                         r = _sp.run(
                             ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
                              f"{_user}@{_host}", cmd],
-                            capture_output=True, text=True, timeout=20)
+                            # The stream sweep ffprobes each cam with a 15s cap
+                            # (worst case ~45s for 3 dead cams) — must outlast it.
+                            capture_output=True, text=True, timeout=60)
                         return r.stdout if r.returncode == 0 else None
                     except Exception as e:
                         print(f"[bridge-watch] ssh failed: {e}", file=sys.stderr)
@@ -550,6 +560,8 @@ def main():
                     max_remediations_per_day=config.get(cfg, "bridge.max_remediations_per_day", 2),
                     remediation_cooldown_s=config.get(cfg, "bridge.remediation_cooldown_s", 3600),
                     interval=config.get(cfg, "bridge.check_interval_s", 300),
+                    probe_cams=config.get(cfg, "bridge.probe_cams",
+                                          ["meowcam1", "meowcam2", "meowcam3"]),
                     state_get=lambda: store.get_daemon_state(conn, "bridge_watch.state", {}),
                     state_set=lambda s: store.set_daemon_state(conn, "bridge_watch.state", s))
                 threading.Thread(target=bw.run, daemon=True).start()

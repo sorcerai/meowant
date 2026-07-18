@@ -15,12 +15,13 @@ from mw.warmreader import WarmReaderPool, file_grab
 
 
 class FakeProc:
-    """Stand-in for a Popen: alive until killed; records terminate()."""
+    """Stand-in for a Popen: alive until killed; records terminate()/kill()."""
     def __init__(self, url, out_path):
         self.url = url
         self.out_path = out_path
         self._alive = True
         self.terminated = False
+        self.killed = False
 
     def poll(self):
         return None if self._alive else 1
@@ -28,6 +29,13 @@ class FakeProc:
     def terminate(self):
         self.terminated = True
         self._alive = False
+
+    def kill(self):
+        self.killed = True
+        self._alive = False
+
+    def wait(self, timeout=None):
+        return 0
 
     def die(self):
         self._alive = False
@@ -86,6 +94,70 @@ def test_supervise_leaves_healthy_readers_alone(tmp_path):
     pool.start()
     pool.supervise_once()
     assert len(launched) == 1      # still alive -> no relaunch
+
+
+def test_supervise_kills_hung_reader_with_stale_output(tmp_path):
+    """The 2026-07-16 blindness: a MediaMTX restart blackholes the reader's TCP
+    session — the ffmpeg stays alive but its output file freezes forever, and
+    poll()-only supervision never notices. Alive + stale output must be killed
+    (SIGKILL — a hung ffmpeg ignores SIGTERM) and relaunched."""
+    cams = [{"name": "a", "url": "ua"}]
+    launch, launched = _fake_launcher()
+    t = [1000.0]
+    pool = WarmReaderPool(cams, str(tmp_path), launch=launch,
+                          stale_after_s=30.0, now_fn=lambda: t[0])
+    pool.start()
+    frame = tmp_path / "a.jpg"
+    frame.write_bytes(b"x")
+    os.utime(str(frame), (t[0], t[0]))   # fresh at launch
+    t[0] += 120.0                        # 2min later, file never updated
+    pool.supervise_once()
+    assert launched[0].killed
+    assert len(launched) == 2            # relaunched
+
+
+def test_supervise_startup_grace_no_kill_before_first_frame(tmp_path):
+    """A just-launched reader hasn't written a frame yet (cold RTSP connect can
+    take seconds); staleness is measured from launch time, so it must NOT be
+    kill-looped before it ever produces output."""
+    cams = [{"name": "a", "url": "ua"}]
+    launch, launched = _fake_launcher()
+    t = [1000.0]
+    pool = WarmReaderPool(cams, str(tmp_path), launch=launch,
+                          stale_after_s=30.0, now_fn=lambda: t[0])
+    pool.start()                         # no a.jpg exists at all
+    t[0] += 10.0                         # inside the grace window
+    pool.supervise_once()
+    assert not launched[0].killed
+    assert len(launched) == 1
+
+
+def test_supervise_fresh_output_not_killed(tmp_path):
+    cams = [{"name": "a", "url": "ua"}]
+    launch, launched = _fake_launcher()
+    t = [1000.0]
+    pool = WarmReaderPool(cams, str(tmp_path), launch=launch,
+                          stale_after_s=30.0, now_fn=lambda: t[0])
+    pool.start()
+    t[0] += 300.0
+    frame = tmp_path / "a.jpg"
+    frame.write_bytes(b"x")
+    os.utime(str(frame), (t[0] - 2.0, t[0] - 2.0))   # updated 2s ago
+    pool.supervise_once()
+    assert not launched[0].killed
+    assert len(launched) == 1
+
+
+def test_launch_cmd_includes_socket_timeout(tmp_path):
+    """Without a socket timeout a blackholed read hangs ffmpeg forever; the
+    RTSP demuxer's -timeout flag turns a bridge-side MediaMTX restart into a
+    ≤15s failure the death supervision already handles. (NOT -rw_timeout —
+    this ffmpeg build rejects it for RTSP inputs.)"""
+    from mw.warmreader import _build_cmd
+    cmd = _build_cmd("rtsp://x/cam", "out.jpg", 1.0, hwaccel="videotoolbox")
+    i = cmd.index("-timeout")
+    assert cmd[i + 1] == "15000000"
+    assert i < cmd.index("-i")           # input option: must precede -i
 
 
 def test_stop_terminates_all(tmp_path):

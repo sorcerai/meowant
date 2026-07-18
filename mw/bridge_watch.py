@@ -5,8 +5,12 @@ two failure modes that have actually taken every camera down:
      ~14h of blackout) and killed all cameras when it hit 100%. There is no
      on-box alarm for this, so meowant has to watch it from the outside.
   2. Publisher death: the cryze_android_app container can stop feeding RTSP
-     without the container itself dying, so MediaMTX's paths list goes to
-     zero `ready` streams while docker still reports the container "up".
+     without the container itself dying, so every stream goes dark while
+     docker still reports the container "up". Probed by ffprobe-ing each
+     configured cam ON the bridge (the same signal the bridge's own
+     cryze-watchdog trusts) — NOT the MediaMTX :9997 API, which is disabled
+     in mediamtx.yml (`api: false`) and refused every probe from deployment
+     day until 2026-07-17 without anyone noticing.
 
 Both probes go through an injected `run_remote(cmd) -> str|None` so this
 module never opens its own SSH connection (and tests never touch a real
@@ -16,18 +20,47 @@ brings streams back in ~2-3 minutes; auto-heal is rate-limited so a bridge
 that's dying repeatedly gets a human paged instead of an unbounded restart
 loop.
 """
-import json
+import re
 import sys
 import time
+
+_CAM_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def streams_probe_cmd(probe_cams):
+    """One on-bridge sweep: ffprobe each cam, echo the names that decode.
+    `-show_entries stream=width` catches both dead streams and the 0x0
+    stuck state (same signal the bridge's own cryze-watchdog trusts).
+    Trailing `true` keeps the ssh exit code 0 even when the LAST cam is
+    down — run_remote wrappers map nonzero exit to None, which would
+    masquerade an all-cams-down result as an ssh failure. Shared by
+    BridgeWatch and scripts/pretrip.py so the two never drift.
+
+    Cam names are interpolated into a remote shell command, so they are
+    validated against a strict charset — a name with whitespace or shell
+    metacharacters (a config typo, or worse) must fail HERE, not execute
+    on the bridge."""
+    bad = [c for c in probe_cams if not _CAM_NAME_RE.match(str(c))]
+    if bad:
+        raise ValueError(f"invalid probe cam name(s): {bad!r}")
+    cams = " ".join(probe_cams)
+    return (f"for c in {cams}; do "
+            f"timeout 15 ffprobe -v error -rtsp_transport tcp "
+            f"-timeout 12000000 -select_streams v:0 "
+            f"-show_entries stream=width -of csv=p=0 "
+            f"rtsp://127.0.0.1:8554/$c >/dev/null 2>&1 && echo $c; "
+            f"done; true")
 
 
 class BridgeWatch:
     def __init__(self, run_remote, notify, *, disk_warn_pct=80, disk_crit_pct=90,
                  streams_grace_s=900, remediate=True, max_remediations_per_day=2,
                  remediation_cooldown_s=3600, interval=300, now_fn=time.time,
-                 state_get=None, state_set=None):
+                 state_get=None, state_set=None,
+                 probe_cams=("meowcam1", "meowcam2", "meowcam3")):
         self.run_remote = run_remote            # (cmd: str) -> str|None
         self.notify = notify                    # (msg: str) -> truthy|False
+        self.probe_cams = list(probe_cams)      # cams ffprobed on-bridge
         self.disk_warn_pct = disk_warn_pct
         self.disk_crit_pct = disk_crit_pct
         self.streams_grace_s = streams_grace_s
@@ -57,15 +90,17 @@ class BridgeWatch:
         except (ValueError, AttributeError):
             return None
 
+    def _streams_probe_cmd(self):
+        return streams_probe_cmd(self.probe_cams)
+
     @staticmethod
     def _parse_ready_count(raw):
+        """Count cams the probe sweep reported up. Empty output is a REAL zero
+        (ssh + ffprobe ran, nothing decoded); only a failed ssh (None) means
+        'unknown, skip this cycle'."""
         if raw is None:
             return None
-        try:
-            items = json.loads(raw).get("items", [])
-            return sum(1 for it in items if it.get("ready"))
-        except (ValueError, TypeError, AttributeError, KeyError):
-            return None
+        return sum(1 for ln in raw.split() if ln.strip())
 
     def _day_key(self, now):
         return time.strftime("%Y-%m-%d", time.localtime(now))
@@ -143,7 +178,7 @@ class BridgeWatch:
         state = self._state_get() or {}
 
         disk_raw = self.run_remote("df --output=pcent / | tail -1")
-        streams_raw = self.run_remote("curl -s --max-time 5 http://127.0.0.1:9997/v3/paths/list")
+        streams_raw = self.run_remote(self._streams_probe_cmd())
 
         if disk_raw is None and streams_raw is None:
             if not state.get("unreachable_alerted"):
