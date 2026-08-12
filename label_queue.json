@@ -1,0 +1,402 @@
+[
+ {
+  "visit_id": 300,
+  "enter_ts": "2026-07-06T00:54:54",
+  "quality": 0.2846,
+  "best_det": 0.732,
+  "ir_frac": 0.8,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 5,
+  "best_frames": [
+   "gallery/captures/1783317345_meowcam2_t4.jpg",
+   "gallery/captures/1783317351_meowcam2_t6.jpg",
+   "gallery/captures/1783317329_meowcam4_10.jpg"
+  ]
+ },
+ {
+  "visit_id": 188,
+  "enter_ts": "2026-06-28T10:43:02",
+  "quality": 0.458,
+  "best_det": 0.97,
+  "ir_frac": 0.57,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 7,
+  "best_frames": [
+   "gallery/captures/1782661385_meowcam2_1.jpg",
+   "gallery/captures/1782661403_meowcam2_6.jpg",
+   "gallery/captures/1782661382_meowcam2_0.jpg"
+  ]
+ },
+ {
+  "visit_id": 177,
+  "enter_ts": "2026-06-28T02:08:03",
+  "quality": 0.443,
+  "best_det": 0.93,
+  "ir_frac": 1.0,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 6,
+  "best_frames": [
+   "gallery/captures/1782630483_meowcam1_0.jpg",
+   "gallery/captures/1782630490_meowcam2_2.jpg",
+   "gallery/captures/1782630496_meowcam2_4.jpg"
+  ]
+ },
+ {
+  "visit_id": 176,
+  "enter_ts": "2026-06-28T00:13:35",
+  "quality": 0.4181,
+  "best_det": 0.353,
+  "ir_frac": 0.89,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 9,
+  "best_frames": [
+   "gallery/captures/1782623615_meowcam1_0.jpg",
+   "gallery/captures/1782623627_meowcam4_4.jpg",
+   "gallery/captures/1782623634_meowcam2_6.jpg"
+  ]
+ },
+ {
+  "visit_id": 528,
+  "enter_ts": "2026-07-24T01:36:17",
+  "quality": 0.4083,
+  "best_det": 0.954,
+  "ir_frac": 0.67,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 3,
+  "best_frames": [
+   "gallery/captures/1784875045_meowcam4_t7.jpg",
+   "gallery/captures/1784875045_meowcam2_t7.jpg",
+   "gallery/captures/1784875045_meowcam3_t7.jpg"
+  ]
+ },
+ {
+  "visit_id": 207,
+  "enter_ts": "2026-06-29T22:41:02",
+  "quality": 0.3837,
+  "best_det": 0.872,
+  "ir_frac": 0.6,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1782790862_meowcam1_0.jpg",
+   "gallery/captures/1782790865_meowcam2_1.jpg",
+   "gallery/captures/1782790887_meowcam2_8.jpg"
+  ]
+ },
+ {
+  "visit_id": 428,
+  "enter_ts": "2026-07-17T23:38:57",
+  "quality": 0.3817,
+  "best_det": 0.897,
+  "ir_frac": 0.88,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 8,
+  "best_frames": [
+   "gallery/captures/1784349537_meowcam1_0.jpg",
+   "gallery/captures/1784349548_meowcam2_1.jpg",
+   "gallery/captures/1784349563_meowcam2_6.jpg"
+  ]
+ },
+ {
+  "visit_id": 440,
+  "enter_ts": "2026-07-18T21:20:22",
+  "quality": 0.3369,
+  "best_det": 0.986,
+  "ir_frac": 0.67,
+  "teacher_preds": [
+   3
+  ],
+  "n_rated": 9,
+  "best_frames": [
+   "gallery/captures/1784427613_meowcam2_pre9.jpg",
+   "gallery/captures/1784427622_meowcam2_pre21.jpg",
+   "gallery/captures/1784427610_meowcam2_pre5.jpg"
+  ]
+ },
+ {
+  "visit_id": 178,
+  "enter_ts": "2026-06-28T04:23:03",
+  "quality": 0.2767,
+  "best_det": 0.982,
+  "ir_frac": 1.0,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 9,
+  "best_frames": [
+   "gallery/captures/1782638595_meowcam2_4.jpg",
+   "gallery/captures/1782638586_meowcam2_1.jpg",
+   "gallery/captures/1782638586_meowcam4_1.jpg"
+  ]
+ },
+ {
+  "visit_id": 179,
+  "enter_ts": "2026-06-28T06:27:22",
+  "quality": 0.2593,
+  "best_det": 0.663,
+  "ir_frac": 1.0,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 4,
+  "best_frames": [
+   "gallery/captures/1782646046_meowcam2_1.jpg",
+   "gallery/captures/1782646052_meowcam2_3.jpg",
+   "gallery/captures/1782646049_meowcam2_2.jpg"
+  ]
+ },
+ {
+  "visit_id": 429,
+  "enter_ts": "2026-07-18T00:27:15",
+  "quality": 0.2293,
+  "best_det": 0.939,
+  "ir_frac": 0.7,
+  "teacher_preds": [
+   3
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1784352483_meowcam2_t1.jpg",
+   "gallery/captures/1784352464_meowcam1_7.jpg",
+   "gallery/captures/1784352476_meowcam1_11.jpg"
+  ]
+ },
+ {
+  "visit_id": 522,
+  "enter_ts": "2026-07-23T18:31:19",
+  "quality": 0.2266,
+  "best_det": 0.993,
+  "ir_frac": 0.8,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1784849509_meowcam1_7.jpg",
+   "gallery/captures/1784849522_meowcam1_11.jpg",
+   "gallery/captures/1784849528_meowcam1_t1.jpg"
+  ]
+ },
+ {
+  "visit_id": 249,
+  "enter_ts": "2026-07-02T10:23:36",
+  "quality": 0.5408,
+  "best_det": 0.954,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1783005835_meowcam2_5.jpg",
+   "gallery/captures/1783005831_meowcam1_4.jpg",
+   "gallery/captures/1783005820_meowcam1_1.jpg"
+  ]
+ },
+ {
+  "visit_id": 303,
+  "enter_ts": "2026-07-06T03:43:07",
+  "quality": 0.4725,
+  "best_det": 0.985,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1783327388_meowcam2_0.jpg",
+   "gallery/captures/1783327387_meowcam2_pre21.jpg",
+   "gallery/captures/1783327380_meowcam2_pre13.jpg"
+  ]
+ },
+ {
+  "visit_id": 302,
+  "enter_ts": "2026-07-06T00:58:05",
+  "quality": 0.3586,
+  "best_det": 0.988,
+  "ir_frac": 0.3,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1783317532_meowcam1_t2.jpg",
+   "gallery/captures/1783317510_meowcam4_7.jpg",
+   "gallery/captures/1783317517_meowcam4_9.jpg"
+  ]
+ },
+ {
+  "visit_id": 342,
+  "enter_ts": "2026-07-11T01:54:44",
+  "quality": 0.3489,
+  "best_det": 0.99,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1783752903_meowcam2_4.jpg",
+   "gallery/captures/1783752948_meowcam2_t4.jpg",
+   "gallery/captures/1783752882_meowcam1_pre20.jpg"
+  ]
+ },
+ {
+  "visit_id": 462,
+  "enter_ts": "2026-07-20T07:15:16",
+  "quality": 0.3418,
+  "best_det": 0.864,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 9,
+  "best_frames": [
+   "gallery/captures/1784549738_meowcam2_4.jpg",
+   "gallery/captures/1784549767_meowcam2_11.jpg",
+   "gallery/captures/1784549713_meowcam1_pre16.jpg"
+  ]
+ },
+ {
+  "visit_id": 210,
+  "enter_ts": "2026-06-30T02:42:09",
+  "quality": 0.3238,
+  "best_det": 0.979,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 9,
+  "best_frames": [
+   "gallery/captures/1782805329_meowcam2_0.jpg",
+   "gallery/captures/1782805340_meowcam2_3.jpg",
+   "gallery/captures/1782805351_meowcam2_6.jpg"
+  ]
+ },
+ {
+  "visit_id": 309,
+  "enter_ts": "2026-07-07T11:52:54",
+  "quality": 0.3197,
+  "best_det": 0.981,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 8,
+  "best_frames": [
+   "gallery/captures/1783443161_meowcam2_pre5.jpg",
+   "gallery/captures/1783443174_meowcam2_0.jpg",
+   "gallery/captures/1783443194_meowcam1_4.jpg"
+  ]
+ },
+ {
+  "visit_id": 258,
+  "enter_ts": "2026-07-03T05:29:31",
+  "quality": 0.2629,
+  "best_det": 0.996,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1783074583_meowcam2_3.jpg",
+   "gallery/captures/1783074606_meowcam1_9.jpg",
+   "gallery/captures/1783074602_meowcam1_8.jpg"
+  ]
+ },
+ {
+  "visit_id": 445,
+  "enter_ts": "2026-07-19T07:44:12",
+  "quality": 0.2501,
+  "best_det": 0.996,
+  "ir_frac": 0.14,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 7,
+  "best_frames": [
+   "gallery/captures/1784465099_meowcam2_t1.jpg",
+   "gallery/captures/1784465084_meowcam2_8.jpg",
+   "gallery/captures/1784465115_meowcam1_t6.jpg"
+  ]
+ },
+ {
+  "visit_id": 433,
+  "enter_ts": "2026-07-18T08:45:01",
+  "quality": 0.1247,
+  "best_det": 0.658,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 6,
+  "best_frames": [
+   "gallery/captures/1784382285_meowcam4_pre3.jpg",
+   "gallery/captures/1784382288_meowcam4_pre7.jpg",
+   "gallery/captures/1784382291_meowcam4_pre11.jpg"
+  ]
+ },
+ {
+  "visit_id": 215,
+  "enter_ts": "2026-06-30T08:29:30",
+  "quality": 0.105,
+  "best_det": 0.994,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   2
+  ],
+  "n_rated": 6,
+  "best_frames": [
+   "gallery/captures/1782826193_meowcam1_6.jpg",
+   "gallery/captures/1782826196_meowcam1_7.jpg",
+   "gallery/captures/1782826189_meowcam1_5.jpg"
+  ]
+ },
+ {
+  "visit_id": 241,
+  "enter_ts": "2026-07-01T19:26:43",
+  "quality": 0.4633,
+  "best_det": 0.917,
+  "ir_frac": 0.0,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1782952007_meowcam2_1.jpg",
+   "gallery/captures/1782952014_meowcam2_3.jpg",
+   "gallery/captures/1782952003_meowcam1_0.jpg"
+  ]
+ },
+ {
+  "visit_id": 319,
+  "enter_ts": "2026-07-08T17:20:39",
+  "quality": 0.4422,
+  "best_det": 0.751,
+  "ir_frac": 0.1,
+  "teacher_preds": [
+   1
+  ],
+  "n_rated": 10,
+  "best_frames": [
+   "gallery/captures/1783549227_meowcam1_pre4.jpg",
+   "gallery/captures/1783549236_meowcam1_pre16.jpg",
+   "gallery/captures/1783549239_meowcam1_0.jpg"
+  ]
+ }
+]

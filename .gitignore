@@ -62,3 +62,9 @@ gallery_emb_cache.npz
 shadow_predictions.jsonl
 shadow_state.json
 shadow_demo*.json*
+
+# Rescued evidence frames + ROI-cropped copies — camera images of the house,
+# same rule as gallery/ and warm_frames/. story_archive/ exists because the
+# daily pruner deletes auto-none captures (see bead meowant-71v).
+story_archive/
+roi_cache/
